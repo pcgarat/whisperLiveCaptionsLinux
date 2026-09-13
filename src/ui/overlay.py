@@ -360,7 +360,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self._always_on_top = bool(enabled)
         self.config["always_on_top"] = self._always_on_top
         self._reapply_flags(show_again=True)
-        self._ensure_on_top()
+        self._ensure_on_top(force_restack=True)
         self._persist_geometry()
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:
@@ -368,19 +368,31 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self._restore_geometry()
         QtCore.QTimer.singleShot(0, self._restore_geometry)
         QtCore.QTimer.singleShot(50, self._restore_geometry)
-        QtCore.QTimer.singleShot(0, self._ensure_on_top)
-        QtCore.QTimer.singleShot(200, self._ensure_on_top)
+        QtCore.QTimer.singleShot(
+            0, lambda: self._ensure_on_top(force_restack=True)
+        )
+        QtCore.QTimer.singleShot(
+            200, lambda: self._ensure_on_top(force_restack=True)
+        )
 
     def moveEvent(self, event: QtGui.QMoveEvent) -> None:
         super().moveEvent(event)
         self._schedule_persist_geometry()
 
-    def _ensure_on_top(self) -> None:
+    def _ensure_on_top(self, *, force_restack: bool = False) -> None:
+        """Mantiene always-on-top sin restackear en cada tick del timer.
+
+        El timer solo repara si se perdió WindowStaysOnTopHint. raise_/wmctrl
+        en cada 1.5 s recomponen la ventana translúcida y provocan parpadeo.
+        """
         if not self.isVisible() or not self._always_on_top:
             return
         flags = self.windowFlags()
-        if not (flags & QtCore.Qt.WindowType.WindowStaysOnTopHint):
+        hint_missing = not bool(flags & QtCore.Qt.WindowType.WindowStaysOnTopHint)
+        if hint_missing:
             self._reapply_flags(show_again=True)
+            force_restack = True
+        if not force_restack:
             return
         self.raise_()
         self._apply_x11_above(True)
@@ -549,27 +561,36 @@ class SubtitleOverlay(QtWidgets.QWidget):
         )
         self.setGeometry(geom)
 
-    def _set_caption_label(self, label: QtWidgets.QLabel, text: str) -> None:
+    def _set_caption_label(self, label: QtWidgets.QLabel, text: str) -> bool:
+        """Actualiza el label solo si el texto plano cambió. True si hubo cambio."""
         plain = text.strip() if text else ""
+        if label.property("captionPlain") == plain:
+            return False
+        label.setProperty("captionPlain", plain)
         if not plain:
             label.setTextFormat(QtCore.Qt.TextFormat.PlainText)
             label.setText("")
-            return
+            return True
         escaped = html.escape(plain).replace("\n", "<br/>")
         label.setTextFormat(QtCore.Qt.TextFormat.RichText)
         label.setText(
             f'<div style="line-height:{_CAPTION_LINE_HEIGHT};">{escaped}</div>'
         )
+        return True
 
     def _apply_caption_geometry(self) -> None:
         self._caption_scroll.setFixedHeight(self._caption_viewport_height())
         self._sync_caption_body_size()
         self._scroll_captions_to_bottom()
 
-    def _sync_caption_body_size(self) -> None:
+    def _sync_caption_body_size(self) -> bool:
+        """Ajusta anchos/alturas del cuerpo. True si cambió la geometría."""
         viewport = self._caption_scroll.viewport()
         width = max(viewport.width(), self.width() - 48, 80)
-        self._caption_body.setFixedWidth(width)
+        changed = False
+        if self._caption_body.width() != width:
+            self._caption_body.setFixedWidth(width)
+            changed = True
         total = 0
         visible = 0
         for label in (
@@ -577,21 +598,32 @@ class SubtitleOverlay(QtWidgets.QWidget):
             self.final_label,
             self.partial_label,
         ):
-            label.setFixedWidth(width)
+            if label.width() != width:
+                label.setFixedWidth(width)
+                changed = True
             if label.isHidden() or not label.text():
-                label.setFixedHeight(0)
+                if label.height() != 0:
+                    label.setFixedHeight(0)
+                    changed = True
                 continue
             height = max(label.heightForWidth(width), label.fontMetrics().height())
-            label.setFixedHeight(height)
+            if label.height() != height:
+                label.setFixedHeight(height)
+                changed = True
             total += height
             visible += 1
         if visible:
             total += _CAPTION_BLOCK_SPACING * (visible - 1)
-        self._caption_body.resize(width, max(total, 1))
+        body_h = max(total, 1)
+        if self._caption_body.width() != width or self._caption_body.height() != body_h:
+            self._caption_body.resize(width, body_h)
+            changed = True
+        return changed
 
     def _scroll_captions_to_bottom(self) -> None:
         bar = self._caption_scroll.verticalScrollBar()
-        bar.setValue(bar.maximum())
+        if bar.value() != bar.maximum():
+            bar.setValue(bar.maximum())
 
     def _trim_display(self, text: str) -> str:
         if len(text) <= _MAX_DISPLAY_CHARS:
@@ -700,7 +732,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
         if desired != self._always_on_top:
             self.set_always_on_top(desired)
         else:
-            self._ensure_on_top()
+            self._ensure_on_top(force_restack=True)
 
     def _show_partials(self) -> bool:
         return bool(self.config.get("captions_show_partials", False))
@@ -759,16 +791,26 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self._apply_caption_geometry()
 
     def _refresh_caption_texts(self) -> None:
+        """Pinta captions sin frames intermedios (evita parpadeo en rewrites)."""
         translation_on = self._translation_active()
         second_text = self._second_line_display_text()
-        self._set_caption_label(
-            self.translated_label, self._translated_text if translation_on else ""
-        )
-        self._set_caption_label(self.final_label, second_text)
-        self._set_caption_label(self.partial_label, "")
-        self._sync_caption_body_size()
-        self._scroll_captions_to_bottom()
-        QtCore.QTimer.singleShot(0, self._scroll_captions_to_bottom)
+        # Un solo paint al final: setText+resize intermedios flashaban el panel.
+        self.setUpdatesEnabled(False)
+        self._caption_scroll.setUpdatesEnabled(False)
+        try:
+            text_changed = False
+            text_changed |= self._set_caption_label(
+                self.translated_label,
+                self._translated_text if translation_on else "",
+            )
+            text_changed |= self._set_caption_label(self.final_label, second_text)
+            text_changed |= self._set_caption_label(self.partial_label, "")
+            geom_changed = self._sync_caption_body_size()
+            if text_changed or geom_changed:
+                self._scroll_captions_to_bottom()
+        finally:
+            self._caption_scroll.setUpdatesEnabled(True)
+            self.setUpdatesEnabled(True)
 
     def _on_translate_toggled(self, enabled: bool) -> None:
         self.config["translation_enabled"] = bool(enabled)
