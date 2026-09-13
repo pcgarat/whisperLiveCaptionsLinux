@@ -2,14 +2,14 @@
 
 # Spec: Fase 2.2 — Traducción EN→ES
 
-**Estado:** aprobado (2026-09-13).  
+**Estado:** aprobado (2026-09-13); enmienda segunda línea (selector).  
 **Intent:** `docs/intent/fase2.2-traduccion-en-es-2026-09-13.md`  
 **Base:** Fase 1 + 2.1 (`docs/specs/fase2.1-baja-latencia-2026-09-13.md`)  
 **Skill de diseño:** `.cursor/skills/add-translation-phase/SKILL.md`
 
 ## Objective
 
-Añadir traducción **100 % local** del texto ASR confirmado a español, con controles en el overlay y una línea ASR opcional.
+Añadir traducción **100 % local** del texto ASR confirmado a español, con controles en el overlay y una segunda línea configurable.
 
 **Usuario:** solo el autor.
 
@@ -51,10 +51,16 @@ Añadir traducción **100 % local** del texto ASR confirmado a español, con con
 | Código idioma | Clic → menú de `installed_languages` (MVP: al menos `en`; incluir `es` para passthrough) |
 | Toggle ES | Activa/desactiva `translation_enabled`; persiste en config |
 | Línea 1 | ES confirmado traducido; visible solo si traducción ON y hay texto |
-| Línea 2 | ASR en vivo (final + parcial como hoy); visible según `show_asr_line` **cuando** hay traducción; con traducción OFF el layout principal sigue siendo el ASR de una línea (comportamiento actual) |
+| Línea 2 | Con traducción ON, según `second_line_mode` (una sola fila visual; **nunca** traducción + final + parcial = 3 líneas). Con traducción OFF: ASR final+parcial como hoy |
+
+Valores de `second_line_mode`:
+- `live_asr` — ASR en vivo (confirmado + parcial en **una** línea)
+- `original` — solo texto confirmado en el idioma fuente
+- `none` — sin segunda línea
 
 ### Settings
-- Checkbox/toggle: **Mostrar línea ASR** (`show_asr_line`, default **true** recomendado para comparar origen/traducción).
+- Selector: **Segunda línea** (`second_line_mode`, default `live_asr`).
+- Migración: legacy `show_asr_line=true|false` → `live_asr` / `none`.
 - Lista o nota de idiomas instalados (MVP puede ser fija en código + config).
 
 ### Config (propuesta)
@@ -65,12 +71,12 @@ Añadir traducción **100 % local** del texto ASR confirmado a español, con con
   "installed_languages": ["en", "es"],
   "translation_enabled": false,
   "translation_target": "es",
-  "show_asr_line": true,
+  "second_line_mode": "live_asr",
   "translator_model": "nllb-200-distilled-ct2"
 }
 ```
 
-Default `translation_enabled=false` en **config nueva**; si el usuario lo activa, el valor (y el resto de flags de traducción/idioma/`show_asr_line`) **persisten en `config.json` y se restauran al reiniciar** como el resto de parámetros. Carga del modelo: lazy al primer ON de la sesión, o al arranque si el flag ya venía `true` en config.
+Default `translation_enabled=false` en **config nueva**; si el usuario lo activa, el valor (y el resto de flags de traducción/idioma/`second_line_mode`) **persisten en `config.json` y se restauran al reiniciar** como el resto de parámetros. Carga del modelo: lazy al primer ON de la sesión, o al arranque si el flag ya venía `true` en config.
 
 ## Contrato de datos
 
@@ -97,7 +103,7 @@ src/asr/translate.py      # NullTranslator + NllbTranslator (CT2)
 src/asr/types.py          # CaptionUpdate.translated_text
 src/asr/pipeline.py       # traducir finales; lazy load
 src/ui/overlay.py         # lang click, toggle, línea ES + ASR
-src/ui/settings.py        # show_asr_line
+src/ui/settings.py        # second_line_mode
 src/config.py             # nuevos campos + validación
 config.example.json
 tests/test_translate.py   # passthrough, EN→ES mockeado
@@ -131,7 +137,7 @@ Documentar descarga/caché del modelo de traducción en README.
 | Unit | `NullTranslator` passthrough; con `source==es` no traduce |
 | Unit | Pipeline/helper: solo llama `translate` en `is_final` |
 | Unit | Config: defaults y clamps de flags nuevos |
-| Manual | EN→ES ≥15 min; toggle ON/OFF; `show_asr_line`; click idioma `en`/`es` |
+| Manual | EN→ES ≥15 min; toggle ON/OFF; `second_line_mode`; click idioma `en`/`es` |
 | No CI | Inferencia NLLB GPU real (mock del Translator en unit) |
 
 ## Boundaries
@@ -140,7 +146,7 @@ Documentar descarga/caché del modelo de traducción en README.
 - Traducción local; solo confirmados.
 - ASR + translate fuera del hilo UI.
 - Passthrough si `language==es` o toggle OFF.
-- Persistir y restaurar flags de traducción/idioma/`show_asr_line` en `config.json` entre reinicios.
+- Persistir y restaurar flags de traducción/idioma/`second_line_mode` en `config.json` entre reinicios.
 - Actualizar este spec si cambia el modelo o el layout.
 
 **Ask first:**
@@ -157,7 +163,7 @@ Documentar descarga/caché del modelo de traducción en README.
 ## Success Criteria
 
 1. Toggle traducción e idioma en overlay / Settings **persisten** y se restauran al reiniciar; se reinicia/recarga translator según haga falta.
-2. Con EN + traducción ON, línea 1 muestra ES de texto confirmado; línea 2 (si `show_asr_line`) muestra ASR en vivo.
+2. Con EN + traducción ON, línea 1 muestra ES de texto confirmado; línea 2 según `second_line_mode` (`live_asr` / `original` / `none`); como máximo **2** líneas de caption.
 3. Con traducción OFF, overlay vuelve al comportamiento de una línea ASR.
 4. Con idioma `es`, no se invoca traducción real (passthrough).
 5. Click en código de idioma cambia entre `installed_languages` y persiste.
@@ -171,7 +177,7 @@ Resueltas al aprobar el spec (2026-09-13):
 
 1. Modelo → **NLLB-200 distilled vía CT2** (lazy; CUDA int8 o CPU si hace falta).
 2. Default `translation_enabled` → **false** en config nueva; si el usuario lo activa, **persiste y se restaura** al reiniciar.
-3. Default `show_asr_line` → **true**.
+3. Default `second_line_mode` → **`live_asr`** (migración desde `show_asr_line`).
 4. Carga → **lazy** al primer ON; si el flag ya venía `true` en config, cargar al arrancar el pipeline.
 5. Solo texto **confirmado**; flags de traducción/idioma en `config.json` como el resto.
 

@@ -36,7 +36,7 @@ El toggle de traducción hace **hot-swap** del traductor (no recarga Whisper).
 - En el overlay: clic en el código de idioma (`EN`/`ES`/…) para cambiar entre `installed_languages`.
 - En Settings: selector de idiomas instalados + **Instalar nuevos…** (catálogo fijo: en/es/fr/de/it/pt; sin descarga).
 - Botón **ES** (toggle): activa/desactiva traducción. Persiste en `config.json`.
-- Con traducción ON: línea 1 = español (solo texto ASR **confirmado**); línea 2 = ASR en vivo si **Mostrar línea ASR** está activo en Settings.
+- Con traducción ON: línea 1 = español (solo texto ASR **confirmado**); línea 2 según Settings → **Segunda línea**: ASR en vivo, idioma original, o nada.
 - Con idioma `es` o toggle OFF: no se traduce (passthrough).
 - Modelo: `JustFrederik/nllb-200-distilled-600M-ct2-int8` (alias config `nllb-200-distilled-ct2`).
   - Primera activación descarga ~600 MB a la caché de Hugging Face.
