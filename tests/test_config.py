@@ -34,7 +34,7 @@ def test_load_missing_returns_defaults(tmp_path: Path) -> None:
     )
     assert cfg["translation_enabled"] is True
     assert cfg["translation_target"] == "es"
-    assert cfg["translation_sticky_mode"] == "committed"
+    assert cfg["translation_sticky_mode"] == "off"
     assert cfg["second_line_mode"] == "none"
     assert cfg["captions_show_partials"] is False
     assert cfg["captions_allow_rewrite"] is True
@@ -191,10 +191,10 @@ def test_migrate_legacy_show_asr_line_to_second_line_mode() -> None:
 
 
 def test_translation_sticky_mode_defaults_and_clamp() -> None:
-    assert validate_config({})["translation_sticky_mode"] == "committed"
-    assert validate_config({"translation_sticky_mode": "off"})[
+    assert validate_config({})["translation_sticky_mode"] == "off"
+    assert validate_config({"translation_sticky_mode": "committed"})[
         "translation_sticky_mode"
-    ] == "off"
+    ] == "committed"
     assert validate_config({"translation_sticky_mode": "PARTIALS"})[
         "translation_sticky_mode"
     ] == "partials"

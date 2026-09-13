@@ -20,9 +20,11 @@ def test_app_preset_defaults() -> None:
     assert APP_PRESET_DEFAULT in cfg["app_presets"]
     assert set(cfg["app_presets"]) == {APP_PRESET_DEFAULT}
     assert cfg["app_presets"][APP_PRESET_DEFAULT]["translation_enabled"] is True
-    assert cfg["app_presets"][APP_PRESET_DEFAULT]["translation_sticky_mode"] == (
-        "committed"
-    )
+    assert cfg["app_presets"][APP_PRESET_DEFAULT]["translation_sticky_mode"] == "off"
+    assert cfg["translation_sticky_mode"] == "off"
+    assert abs(
+        float(cfg["latency_profiles"]["stable"]["max_latency_sec"]) - 0.4
+    ) < 1e-9
     assert cfg["language"] == DEFAULTS["language"]
     assert cfg["model"] == DEFAULTS["model"]
 

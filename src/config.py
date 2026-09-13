@@ -73,7 +73,7 @@ def _builtin_defaults() -> dict[str, Any]:
         "latency_profiles": {
             "stable": {
                 "agreement_n": 1,
-                "max_latency_sec": 0.8,
+                "max_latency_sec": 0.4,
                 "min_chunk_seconds": 0.8,
             },
             "low": {
@@ -85,7 +85,7 @@ def _builtin_defaults() -> dict[str, Any]:
         "installed_languages": list(AVAILABLE_LANGUAGES.keys()),
         "translation_enabled": True,
         "translation_target": "es",
-        "translation_sticky_mode": "committed",
+        "translation_sticky_mode": "off",
         "second_line_mode": "none",
         "captions_show_partials": False,
         "captions_allow_rewrite": True,

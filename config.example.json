@@ -10,7 +10,7 @@
   "latency_profiles": {
     "stable": {
       "agreement_n": 1,
-      "max_latency_sec": 0.8,
+      "max_latency_sec": 0.4,
       "min_chunk_seconds": 0.8
     },
     "low": {
@@ -29,7 +29,7 @@
   ],
   "translation_enabled": true,
   "translation_target": "es",
-  "translation_sticky_mode": "committed",
+  "translation_sticky_mode": "off",
   "second_line_mode": "none",
   "captions_show_partials": false,
   "captions_allow_rewrite": true,
@@ -79,7 +79,7 @@
   "opt_short_caption_beam_cap": true,
   "min_chunk_seconds": 0.8,
   "agreement_n": 1,
-  "max_latency_sec": 0.8,
+  "max_latency_sec": 0.4,
   "app_preset": "default",
   "app_presets": {
     "default": {
@@ -94,7 +94,7 @@
       "latency_profiles": {
         "stable": {
           "agreement_n": 1,
-          "max_latency_sec": 0.8,
+          "max_latency_sec": 0.4,
           "min_chunk_seconds": 0.8
         },
         "low": {
@@ -113,7 +113,7 @@
       ],
       "translation_enabled": true,
       "translation_target": "es",
-      "translation_sticky_mode": "committed",
+      "translation_sticky_mode": "off",
       "second_line_mode": "none",
       "captions_show_partials": false,
       "captions_allow_rewrite": true,
@@ -163,7 +163,7 @@
       "opt_short_caption_beam_cap": true,
       "min_chunk_seconds": 0.8,
       "agreement_n": 1,
-      "max_latency_sec": 0.8
+      "max_latency_sec": 0.4
     }
   }
 }
