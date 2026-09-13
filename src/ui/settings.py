@@ -861,8 +861,8 @@ class SettingsDialog(QtWidgets.QDialog):
         idx = self.second_line_mode.findData(current_mode)
         self.second_line_mode.setCurrentIndex(idx if idx >= 0 else 0)
         self.second_line_mode.setToolTip(
-            "Con traducción activa: línea 1 = traducción; línea 2 = ASR en vivo, "
-            "solo el texto confirmado en el idioma original, o ninguna."
+            "Con traducción: línea 1 = traducción; línea 2 según este selector. "
+            "Sin traducción: una sola línea ASR (confirmado, en vivo, o solo confirmado)."
         )
         display.add_row("Segunda línea", self.second_line_mode)
 

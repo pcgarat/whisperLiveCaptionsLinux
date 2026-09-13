@@ -22,10 +22,14 @@ def qapp() -> QtWidgets.QApplication:
     return app
 
 
-def _overlay(qapp: QtWidgets.QApplication) -> tuple[SubtitleOverlay, queue.Queue]:
+def _overlay(
+    qapp: QtWidgets.QApplication,
+    *,
+    cfg: dict | None = None,
+) -> tuple[SubtitleOverlay, queue.Queue]:
     del qapp
     q: queue.Queue[CaptionUpdate] = queue.Queue()
-    cfg = {
+    base = {
         "language": "en",
         "translation_enabled": True,
         "translation_target": "es",
@@ -36,7 +40,9 @@ def _overlay(qapp: QtWidgets.QApplication) -> tuple[SubtitleOverlay, queue.Queue
         "font_color": "#FFFFFF",
         "bg_opacity": 0.55,
     }
-    ov = SubtitleOverlay(text_queue=q, config=cfg)
+    if cfg:
+        base.update(cfg)
+    ov = SubtitleOverlay(text_queue=q, config=base)
     ov._timer.stop()
     return ov, q
 
@@ -679,4 +685,117 @@ def test_apply_config_text_align_left(qapp: QtWidgets.QApplication) -> None:
         ov.partial_label.alignment() & QtCore.Qt.AlignmentFlag.AlignLeft
         == QtCore.Qt.AlignmentFlag.AlignLeft
     )
+    ov.close()
+
+
+def test_second_line_none_hides_asr_with_translation(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    ov, q = _overlay(qapp, cfg={"second_line_mode": "none"})
+    ov.show()
+    qapp.processEvents()
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Hola",
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    assert ov._translated_text == "Hola"
+    assert ov.final_label.isHidden()
+    assert ov.final_label.text() == ""
+    ov.close()
+
+
+def test_second_line_original_without_translation(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    ov, q = _overlay(
+        qapp,
+        cfg={"translation_enabled": False, "second_line_mode": "original"},
+    )
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            seq=1,
+        )
+    )
+    q.put(
+        CaptionUpdate(
+            text="Hello world",
+            is_final=False,
+            language="en",
+            ts_mono=now,
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    assert "Hello world" not in ov.final_label.text()
+    assert "Hello" in ov.final_label.text()
+    ov.close()
+
+
+def test_second_line_live_asr_without_translation(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    ov, q = _overlay(
+        qapp,
+        cfg={"translation_enabled": False, "second_line_mode": "live_asr"},
+    )
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            seq=1,
+        )
+    )
+    q.put(
+        CaptionUpdate(
+            text="Hello world",
+            is_final=False,
+            language="en",
+            ts_mono=now,
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    assert "Hello world" in ov.final_label.text()
+    assert ov.partial_label.isHidden()
+    ov.close()
+
+
+def test_apply_config_second_line_mode(qapp: QtWidgets.QApplication) -> None:
+    ov, q = _overlay(qapp, cfg={"second_line_mode": "live_asr"})
+    ov.show()
+    qapp.processEvents()
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Hola",
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    assert ov.final_label.isVisible()
+
+    cfg = dict(ov.config)
+    cfg["second_line_mode"] = "none"
+    ov.apply_config(cfg)
+    assert ov.final_label.isHidden()
     ov.close()

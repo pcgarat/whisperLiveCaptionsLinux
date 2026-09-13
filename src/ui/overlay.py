@@ -705,20 +705,32 @@ class SubtitleOverlay(QtWidgets.QWidget):
             return "live_asr"
         return mode
 
+    def _second_line_display_text(self) -> str:
+        mode = self._second_line_mode()
+        if mode == "live_asr":
+            if not self._show_partials():
+                return self._final_text
+            parts = [part for part in (self._final_text, self._partial_text) if part]
+            return " ".join(parts).strip()
+        if mode == "original":
+            return self._final_text
+        # none: sin traducción sigue mostrando el ASR confirmado; con TX oculta la 2ª línea.
+        if self._translation_active():
+            return ""
+        return self._final_text
+
     def _sync_translation_ui(self) -> None:
         translation_on = self._translation_active()
+        mode = self._second_line_mode()
         self.translated_label.setVisible(translation_on)
         if not translation_on:
             self._translated_text = ""
             self.translated_label.setText("")
-            self.final_label.setVisible(True)
-            self.partial_label.setVisible(self._show_partials())
+        if translation_on:
+            self.final_label.setVisible(mode != "none")
         else:
-            mode = self._second_line_mode()
-            show_second = mode != "none"
-            self.final_label.setVisible(show_second)
-            # Con traducción nunca usamos partial como tercera línea visual.
-            self.partial_label.setVisible(False)
+            self.final_label.setVisible(True)
+        self.partial_label.setVisible(False)
         self._refresh_caption_texts()
         self._apply_style()
         needed = max(self.height(), self._default_window_height())
@@ -728,22 +740,12 @@ class SubtitleOverlay(QtWidgets.QWidget):
 
     def _refresh_caption_texts(self) -> None:
         translation_on = self._translation_active()
+        second_text = self._second_line_display_text()
         self._set_caption_label(
             self.translated_label, self._translated_text if translation_on else ""
         )
-        if not translation_on:
-            self._set_caption_label(self.final_label, self._final_text)
-            self._set_caption_label(self.partial_label, self._partial_text)
-        else:
-            mode = self._second_line_mode()
-            if mode == "live_asr":
-                parts = [part for part in (self._final_text, self._partial_text) if part]
-                self._set_caption_label(self.final_label, " ".join(parts).strip())
-            elif mode == "original":
-                self._set_caption_label(self.final_label, self._final_text)
-            else:
-                self._set_caption_label(self.final_label, "")
-            self._set_caption_label(self.partial_label, "")
+        self._set_caption_label(self.final_label, second_text)
+        self._set_caption_label(self.partial_label, "")
         self._sync_caption_body_size()
         self._scroll_captions_to_bottom()
         QtCore.QTimer.singleShot(0, self._scroll_captions_to_bottom)
