@@ -40,7 +40,9 @@ class LocalAgreementStreamer:
     def push(self, hypothesis: str) -> StreamingResult:
         text = _normalize(hypothesis)
         if not text:
-            return StreamingResult(partial="", committed=self._committed, newly_committed="")
+            return StreamingResult(
+                partial="", committed=self._committed, newly_committed=""
+            )
 
         self._hypotheses.append(text)
         if len(self._hypotheses) > self.agreement_n:

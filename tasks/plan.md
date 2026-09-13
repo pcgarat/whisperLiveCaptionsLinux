@@ -1,30 +1,11 @@
-# Implementation Plan: Fase 2.3 — Instalar idiomas
+# Plan: Fase 2.4 — Presets de calidad de traducción
 
-## Overview
+Spec: `docs/specs/fase2.4-traduccion-presets-calidad-2026-09-13.md`  
+**Estado:** implementación completa (spec aprobado 2026-09-13). Pendiente smoke manual.
 
-Catálogo fijo de idiomas + diálogo en Settings para añadirlos a `installed_languages`. Sin descargas ni progreso. Selectores Settings/overlay consumen esa lista.
+## Enfoque
 
-**Spec:** `docs/specs/fase2.3-instalar-idiomas-2026-09-13.md`  
-**Intent:** `docs/intent/fase2.3-instalar-idiomas-2026-09-13.md`
-
-## Architecture Decisions
-
-- **Catálogo en `src/asr/languages.py`:** desacopla UI de NLLB; `NLLB_LANG_CODES` se alinea con las mismas claves.
-- **Sin worker/descarga:** instalar = merge de listas en memoria.
-- **Settings posee el estado:** el diálogo muta `installed_languages` del SettingsDialog; Guardar persiste.
-- **Overlay sin API nueva:** ya lee `installed_languages` en el menú.
-
-## Dependency Graph
-
-```
-languages catalog
-    │
-    ├── Settings combo + InstallLanguagesDialog
-    │
-    └── (indirect) Overlay lang menu via installed_languages
-```
-
-## Tasks
-
-1. Catálogo + helpers + alinear NLLB + tests
-2. Settings: combo + diálogo instalar + README/todo
+1. **Config:** constantes de fábrica, clamp, `effective_translation_decode`, migración, CRUD usuario. ✅
+2. **Motor:** `translate_batch` con knobs; hot-swap decode sin recrear modelo. ✅
+3. **UI:** pestañas General / Traducciones; presets + Guardar/Borrar. ✅
+4. **Docs/tests.** ✅

@@ -10,6 +10,21 @@ LATENCY_FACTORY_PRESETS: dict[str, dict[str, float | int]] = {
     "low": {"agreement_n": 1, "max_latency_sec": 1.0, "min_chunk_seconds": 0.35},
 }
 
+# Decoding NLLB (fábrica). `custom` no es fábrica: perfil editable persistente.
+TRANSLATION_FACTORY_PRESETS: dict[str, dict[str, float | int]] = {
+    "fast": {"beam_size": 2, "length_penalty": 1.0, "no_repeat_ngram_size": 0},
+    "balanced": {"beam_size": 4, "length_penalty": 1.0, "no_repeat_ngram_size": 3},
+    "quality": {"beam_size": 6, "length_penalty": 1.1, "no_repeat_ngram_size": 3},
+}
+TRANSLATION_FACTORY_PRESET_IDS = frozenset(TRANSLATION_FACTORY_PRESETS)
+TRANSLATION_RESERVED_PRESET_IDS = TRANSLATION_FACTORY_PRESET_IDS | {"custom"}
+TRANSLATION_PRESET_LABELS: dict[str, str] = {
+    "fast": "Rápido",
+    "balanced": "Equilibrado",
+    "quality": "Calidad",
+    "custom": "Custom",
+}
+
 # Con traducción ON: qué mostrar como segunda línea (nunca más de 2 líneas de caption).
 SECOND_LINE_MODES = ("live_asr", "original", "none")
 
@@ -28,6 +43,11 @@ DEFAULTS: dict[str, Any] = {
     "translation_target": "es",
     "second_line_mode": "live_asr",
     "translator_model": "nllb-200-distilled-ct2",
+    "translation_decode_preset": "balanced",
+    "translation_profiles": {
+        **deepcopy(TRANSLATION_FACTORY_PRESETS),
+        "custom": deepcopy(TRANSLATION_FACTORY_PRESETS["balanced"]),
+    },
     "always_on_top": True,
     "font_size": 28,
     "font_color": "#ffffff",
@@ -50,7 +70,9 @@ def _clamp(value: float, low: float, high: float) -> float:
     return max(low, min(high, value))
 
 
-def _clamp_profile(raw: dict[str, Any] | None, factory: dict[str, float | int]) -> dict[str, float | int]:
+def _clamp_profile(
+    raw: dict[str, Any] | None, factory: dict[str, float | int]
+) -> dict[str, float | int]:
     src = factory if not isinstance(raw, dict) else {**factory, **raw}
     return {
         "agreement_n": int(_clamp(int(src["agreement_n"]), 1, 5)),
@@ -59,7 +81,9 @@ def _clamp_profile(raw: dict[str, Any] | None, factory: dict[str, float | int]) 
     }
 
 
-def _migrate_latency_profiles(data: dict[str, Any], mode: str) -> dict[str, dict[str, float | int]]:
+def _migrate_latency_profiles(
+    data: dict[str, Any], mode: str
+) -> dict[str, dict[str, float | int]]:
     profiles_in = data.get("latency_profiles")
     profiles: dict[str, dict[str, float | int]] = {
         name: deepcopy(preset) for name, preset in LATENCY_FACTORY_PRESETS.items()
@@ -79,7 +103,9 @@ def _migrate_latency_profiles(data: dict[str, Any], mode: str) -> dict[str, dict
     if "max_latency_sec" in data:
         legacy["max_latency_sec"] = data["max_latency_sec"]
     if legacy:
-        profiles[mode] = _clamp_profile({**LATENCY_FACTORY_PRESETS[mode], **legacy}, LATENCY_FACTORY_PRESETS[mode])
+        profiles[mode] = _clamp_profile(
+            {**LATENCY_FACTORY_PRESETS[mode], **legacy}, LATENCY_FACTORY_PRESETS[mode]
+        )
     return profiles
 
 
@@ -89,10 +115,14 @@ def effective_latency_profile(cfg: dict[str, Any]) -> dict[str, float | int]:
         mode = "stable"
     profiles = cfg.get("latency_profiles") or LATENCY_FACTORY_PRESETS
     raw = profiles.get(mode) if isinstance(profiles, dict) else None
-    return _clamp_profile(raw if isinstance(raw, dict) else None, LATENCY_FACTORY_PRESETS[mode])
+    return _clamp_profile(
+        raw if isinstance(raw, dict) else None, LATENCY_FACTORY_PRESETS[mode]
+    )
 
 
-def reset_latency_profile(cfg: dict[str, Any], mode: str | None = None) -> dict[str, Any]:
+def reset_latency_profile(
+    cfg: dict[str, Any], mode: str | None = None
+) -> dict[str, Any]:
     out = deepcopy(cfg)
     active = mode or str(out.get("latency_mode", "stable"))
     if active not in LATENCY_FACTORY_PRESETS:
@@ -110,6 +140,145 @@ def reset_latency_profile(cfg: dict[str, Any], mode: str | None = None) -> dict[
 
 def beam_size_for_mode(mode: str) -> int:
     return 1 if mode == "low" else 5
+
+
+def _clamp_translation_decode(
+    raw: dict[str, Any] | None,
+    fallback: dict[str, float | int],
+) -> dict[str, float | int]:
+    src = fallback if not isinstance(raw, dict) else {**fallback, **raw}
+    return {
+        "beam_size": int(_clamp(int(src["beam_size"]), 1, 8)),
+        "length_penalty": float(_clamp(float(src["length_penalty"]), 0.6, 1.5)),
+        "no_repeat_ngram_size": int(_clamp(int(src["no_repeat_ngram_size"]), 0, 5)),
+    }
+
+
+def _migrate_translation_profiles(
+    data: dict[str, Any],
+) -> dict[str, dict[str, float | int]]:
+    balanced = TRANSLATION_FACTORY_PRESETS["balanced"]
+    profiles: dict[str, dict[str, float | int]] = {
+        name: deepcopy(preset) for name, preset in TRANSLATION_FACTORY_PRESETS.items()
+    }
+    profiles["custom"] = deepcopy(balanced)
+
+    profiles_in = data.get("translation_profiles")
+    if not isinstance(profiles_in, dict):
+        return profiles
+
+    custom_raw = profiles_in.get("custom")
+    profiles["custom"] = _clamp_translation_decode(
+        custom_raw if isinstance(custom_raw, dict) else None,
+        balanced,
+    )
+
+    for name, raw in profiles_in.items():
+        key = str(name).strip().lower()
+        if not key or key in TRANSLATION_RESERVED_PRESET_IDS:
+            continue
+        if not isinstance(raw, dict):
+            continue
+        profiles[key] = _clamp_translation_decode(raw, balanced)
+    return profiles
+
+
+def _normalize_translation_decode_preset(
+    raw: Any, profiles: dict[str, dict[str, float | int]]
+) -> str:
+    preset = str(raw or "balanced").strip().lower() or "balanced"
+    if preset in profiles:
+        return preset
+    return "balanced"
+
+
+def effective_translation_decode(cfg: dict[str, Any]) -> dict[str, float | int]:
+    profiles = cfg.get("translation_profiles")
+    if not isinstance(profiles, dict):
+        profiles = DEFAULTS["translation_profiles"]
+    preset = _normalize_translation_decode_preset(
+        cfg.get("translation_decode_preset"), profiles
+    )
+    if preset in TRANSLATION_FACTORY_PRESETS:
+        return deepcopy(TRANSLATION_FACTORY_PRESETS[preset])
+    raw = profiles.get(preset)
+    fallback = TRANSLATION_FACTORY_PRESETS["balanced"]
+    return _clamp_translation_decode(raw if isinstance(raw, dict) else None, fallback)
+
+
+def slugify_translation_preset_name(name: str) -> str:
+    raw = str(name or "").strip().lower()
+    out: list[str] = []
+    prev_dash = False
+    for ch in raw:
+        if ch.isalnum():
+            out.append(ch)
+            prev_dash = False
+        elif ch in (" ", "-", "_"):
+            if out and not prev_dash:
+                out.append("-")
+                prev_dash = True
+    slug = "".join(out).strip("-_")
+    return slug
+
+
+def add_translation_user_preset(
+    cfg: dict[str, Any],
+    name: str,
+    decode: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Añade o actualiza un preset de usuario y lo deja activo. Raises ValueError si el nombre no vale."""
+    slug = slugify_translation_preset_name(name)
+    if not slug:
+        raise ValueError("Nombre de preset vacío o inválido")
+    if slug in TRANSLATION_RESERVED_PRESET_IDS:
+        raise ValueError(f"El nombre «{slug}» está reservado")
+
+    out = deepcopy(cfg)
+    profiles = _migrate_translation_profiles(out)
+    values = _clamp_translation_decode(
+        decode if isinstance(decode, dict) else effective_translation_decode(out),
+        TRANSLATION_FACTORY_PRESETS["balanced"],
+    )
+    profiles[slug] = values
+    out["translation_profiles"] = profiles
+    out["translation_decode_preset"] = slug
+    return validate_config(out)
+
+
+def delete_translation_user_preset(
+    cfg: dict[str, Any], preset_id: str
+) -> dict[str, Any]:
+    """Borra un preset de usuario. Si era el activo, pasa a custom con snapshot actual."""
+    key = str(preset_id or "").strip().lower()
+    if not key or key in TRANSLATION_RESERVED_PRESET_IDS:
+        raise ValueError("No se puede borrar un preset de fábrica o Custom")
+
+    out = deepcopy(cfg)
+    profiles = _migrate_translation_profiles(out)
+    if key not in profiles:
+        raise ValueError(f"Preset desconocido: {key}")
+
+    snapshot = effective_translation_decode(
+        {**out, "translation_profiles": profiles, "translation_decode_preset": key}
+    )
+    del profiles[key]
+    profiles["custom"] = snapshot
+    out["translation_profiles"] = profiles
+    if str(out.get("translation_decode_preset", "")).strip().lower() == key:
+        out["translation_decode_preset"] = "custom"
+    return validate_config(out)
+
+
+def translation_user_preset_ids(cfg: dict[str, Any]) -> list[str]:
+    profiles = cfg.get("translation_profiles")
+    if not isinstance(profiles, dict):
+        return []
+    return sorted(
+        key
+        for key in profiles
+        if str(key).strip().lower() not in TRANSLATION_RESERVED_PRESET_IDS
+    )
 
 
 def _normalize_installed_languages(raw: Any, language: str) -> list[str]:
@@ -153,7 +322,9 @@ def validate_config(data: dict[str, Any]) -> dict[str, Any]:
     cfg["bg_alpha"] = float(_clamp(float(cfg["bg_alpha"]), 0.05, 1.0))
     cfg["padding"] = int(_clamp(int(cfg["padding"]), 0, 100))
     cfg["window_width"] = int(_clamp(int(cfg["window_width"]), 300, 2400))
-    cfg["buffer_trimming_sec"] = float(_clamp(float(cfg["buffer_trimming_sec"]), 5.0, 60.0))
+    cfg["buffer_trimming_sec"] = float(
+        _clamp(float(cfg["buffer_trimming_sec"]), 5.0, 60.0)
+    )
     cfg["language"] = str(cfg["language"]).strip().lower() or "en"
     cfg["model"] = str(cfg["model"]).strip() or "medium"
     cfg["latency_mode"] = str(cfg.get("latency_mode", "stable"))
@@ -165,7 +336,9 @@ def validate_config(data: dict[str, Any]) -> dict[str, Any]:
     cfg["translation_enabled"] = bool(cfg.get("translation_enabled", False))
     cfg["second_line_mode"] = _normalize_second_line_mode(raw)
     cfg.pop("show_asr_line", None)
-    cfg["translation_target"] = str(cfg.get("translation_target") or "es").strip().lower() or "es"
+    cfg["translation_target"] = (
+        str(cfg.get("translation_target") or "es").strip().lower() or "es"
+    )
     cfg["translator_model"] = (
         str(cfg.get("translator_model") or "nllb-200-distilled-ct2").strip()
         or "nllb-200-distilled-ct2"
@@ -176,6 +349,11 @@ def validate_config(data: dict[str, Any]) -> dict[str, Any]:
     )
 
     cfg["latency_profiles"] = _migrate_latency_profiles(raw, cfg["latency_mode"])
+    cfg["translation_profiles"] = _migrate_translation_profiles(raw)
+    cfg["translation_decode_preset"] = _normalize_translation_decode_preset(
+        cfg.get("translation_decode_preset"),
+        cfg["translation_profiles"],
+    )
 
     # Espejo derivado para lecturas legacy / depuración; la fuente de verdad es el profile.
     profile = effective_latency_profile(cfg)

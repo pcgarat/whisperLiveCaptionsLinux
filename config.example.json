@@ -24,6 +24,29 @@
   "translation_target": "es",
   "second_line_mode": "live_asr",
   "translator_model": "nllb-200-distilled-ct2",
+  "translation_decode_preset": "balanced",
+  "translation_profiles": {
+    "fast": {
+      "beam_size": 2,
+      "length_penalty": 1.0,
+      "no_repeat_ngram_size": 0
+    },
+    "balanced": {
+      "beam_size": 4,
+      "length_penalty": 1.0,
+      "no_repeat_ngram_size": 3
+    },
+    "quality": {
+      "beam_size": 6,
+      "length_penalty": 1.1,
+      "no_repeat_ngram_size": 3
+    },
+    "custom": {
+      "beam_size": 4,
+      "length_penalty": 1.0,
+      "no_repeat_ngram_size": 3
+    }
+  },
   "always_on_top": true,
   "font_size": 28,
   "font_color": "#ffffff",

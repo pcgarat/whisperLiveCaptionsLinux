@@ -26,11 +26,23 @@ NLLB_LANG_CODES: dict[str, str] = {
 
 
 class Translator(Protocol):
-    def translate(self, text: str, source_lang: str, target_lang: str = "es") -> str: ...
+    def translate(
+        self,
+        text: str,
+        source_lang: str,
+        target_lang: str = "es",
+        decode: dict[str, float | int] | None = None,
+    ) -> str: ...
 
 
 class NullTranslator:
-    def translate(self, text: str, source_lang: str, target_lang: str = "es") -> str:
+    def translate(
+        self,
+        text: str,
+        source_lang: str,
+        target_lang: str = "es",
+        decode: dict[str, float | int] | None = None,
+    ) -> str:
         return text
 
 
@@ -90,7 +102,13 @@ class NllbCt2Translator:
             else:
                 raise
 
-    def translate(self, text: str, source_lang: str, target_lang: str = "es") -> str:
+    def translate(
+        self,
+        text: str,
+        source_lang: str,
+        target_lang: str = "es",
+        decode: dict[str, float | int] | None = None,
+    ) -> str:
         cleaned = text.strip()
         if not cleaned:
             return text
@@ -108,12 +126,22 @@ class NllbCt2Translator:
         self.load()
         assert self._translator is not None and self._tokenizer is not None
 
+        params = decode or {}
+        beam_size = int(params.get("beam_size", 4))
+        length_penalty = float(params.get("length_penalty", 1.0))
+        ngram = int(params.get("no_repeat_ngram_size", 3))
+
         source_tokens = self._encode(cleaned, src_code)
-        results = self._translator.translate_batch(
-            [source_tokens],
-            target_prefix=[[tgt_code]],
-            max_decoding_length=256,
-        )
+        batch_kwargs: dict[str, Any] = {
+            "target_prefix": [[tgt_code]],
+            "beam_size": beam_size,
+            "length_penalty": length_penalty,
+            "max_decoding_length": 256,
+        }
+        if ngram > 0:
+            batch_kwargs["no_repeat_ngram_size"] = ngram
+
+        results = self._translator.translate_batch([source_tokens], **batch_kwargs)
         hyp = results[0].hypotheses[0] if results and results[0].hypotheses else []
         return self._decode(hyp, tgt_code)
 

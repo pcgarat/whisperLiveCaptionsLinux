@@ -57,4 +57,6 @@ class WhisperEngine:
             condition_on_previous_text=True,
             without_timestamps=True,
         )
-        return " ".join(seg.text.strip() for seg in segments if seg.text.strip()).strip()
+        return " ".join(
+            seg.text.strip() for seg in segments if seg.text.strip()
+        ).strip()

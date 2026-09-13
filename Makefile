@@ -26,7 +26,11 @@ install: venv ## Instala dependencias de requirements.txt
 run: install ## Arranca la app de subtítulos
 	@$(PYQT_ENV); $(BIN)/python -m src.app
 
-test: install ## Ejecuta tests unitarios
+test: install ## Ejecuta tests unitarios (offscreen + libs Qt del venv)
+	@QT6_ROOT="$$($(BIN)/python -c 'import PyQt6, pathlib; print(pathlib.Path(PyQt6.__file__).resolve().parent / "Qt6")')"; \
+	export LD_LIBRARY_PATH="$$QT6_ROOT/lib$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}"; \
+	export QT_PLUGIN_PATH="$$QT6_ROOT/plugins"; \
+	export QT_QPA_PLATFORM=offscreen; \
 	$(BIN)/pytest -q
 
 lint: install ## Lint con ruff

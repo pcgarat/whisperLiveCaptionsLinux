@@ -6,11 +6,16 @@ from pathlib import Path
 from src.config import (
     DEFAULTS,
     LATENCY_FACTORY_PRESETS,
+    TRANSLATION_FACTORY_PRESETS,
+    add_translation_user_preset,
     beam_size_for_mode,
+    delete_translation_user_preset,
     effective_latency_profile,
+    effective_translation_decode,
     load_config,
     reset_latency_profile,
     save_config,
+    slugify_translation_preset_name,
     validate_config,
 )
 
@@ -27,6 +32,14 @@ def test_load_missing_returns_defaults(tmp_path: Path) -> None:
     assert cfg["second_line_mode"] == "live_asr"
     assert cfg["installed_languages"] == ["en", "es"]
     assert cfg["translator_model"] == "nllb-200-distilled-ct2"
+    assert cfg["translation_decode_preset"] == "balanced"
+    assert (
+        cfg["translation_profiles"]["balanced"]
+        == TRANSLATION_FACTORY_PRESETS["balanced"]
+    )
+    assert (
+        cfg["translation_profiles"]["custom"] == TRANSLATION_FACTORY_PRESETS["balanced"]
+    )
 
 
 def test_validate_clamps_ranges() -> None:
@@ -78,7 +91,11 @@ def test_save_and_load_roundtrip_preserves_profiles(tmp_path: Path) -> None:
             "latency_mode": "low",
             "latency_profiles": {
                 "stable": dict(LATENCY_FACTORY_PRESETS["stable"]),
-                "low": {"agreement_n": 1, "max_latency_sec": 0.8, "min_chunk_seconds": 0.4},
+                "low": {
+                    "agreement_n": 1,
+                    "max_latency_sec": 0.8,
+                    "min_chunk_seconds": 0.4,
+                },
             },
         },
         path,
@@ -120,7 +137,9 @@ def test_migrate_legacy_show_asr_line_to_second_line_mode() -> None:
     migrated = validate_config({"show_asr_line": False, "second_line_mode": "original"})
     assert migrated["second_line_mode"] == "original"
     assert "show_asr_line" not in migrated
-    assert validate_config({"second_line_mode": "nope"})["second_line_mode"] == "live_asr"
+    assert (
+        validate_config({"second_line_mode": "nope"})["second_line_mode"] == "live_asr"
+    )
 
 
 def test_installed_languages_includes_active_language() -> None:
@@ -141,11 +160,130 @@ def test_reset_latency_profile_restores_factory() -> None:
         {
             "latency_mode": "low",
             "latency_profiles": {
-                "low": {"agreement_n": 4, "max_latency_sec": 2.5, "min_chunk_seconds": 1.0},
-                "stable": {"agreement_n": 5, "max_latency_sec": 4.0, "min_chunk_seconds": 1.5},
+                "low": {
+                    "agreement_n": 4,
+                    "max_latency_sec": 2.5,
+                    "min_chunk_seconds": 1.0,
+                },
+                "stable": {
+                    "agreement_n": 5,
+                    "max_latency_sec": 4.0,
+                    "min_chunk_seconds": 1.5,
+                },
             },
         }
     )
     reset = reset_latency_profile(cfg, "low")
     assert reset["latency_profiles"]["low"] == LATENCY_FACTORY_PRESETS["low"]
     assert reset["latency_profiles"]["stable"]["agreement_n"] == 5
+
+
+def test_translation_decode_defaults_and_factory_resync() -> None:
+    cfg = validate_config(
+        {
+            "translation_profiles": {
+                "balanced": {
+                    "beam_size": 1,
+                    "length_penalty": 0.6,
+                    "no_repeat_ngram_size": 0,
+                },
+                "custom": {
+                    "beam_size": 5,
+                    "length_penalty": 1.2,
+                    "no_repeat_ngram_size": 4,
+                },
+            }
+        }
+    )
+    assert cfg["translation_decode_preset"] == "balanced"
+    assert (
+        cfg["translation_profiles"]["balanced"]
+        == TRANSLATION_FACTORY_PRESETS["balanced"]
+    )
+    assert cfg["translation_profiles"]["custom"]["beam_size"] == 5
+    assert effective_translation_decode(cfg) == TRANSLATION_FACTORY_PRESETS["balanced"]
+
+
+def test_translation_decode_clamps_and_unknown_preset() -> None:
+    cfg = validate_config(
+        {
+            "translation_decode_preset": "nope",
+            "translation_profiles": {
+                "custom": {
+                    "beam_size": 99,
+                    "length_penalty": 9.0,
+                    "no_repeat_ngram_size": -1,
+                }
+            },
+        }
+    )
+    assert cfg["translation_decode_preset"] == "balanced"
+    assert cfg["translation_profiles"]["custom"]["beam_size"] == 8
+    assert abs(cfg["translation_profiles"]["custom"]["length_penalty"] - 1.5) < 1e-9
+    assert cfg["translation_profiles"]["custom"]["no_repeat_ngram_size"] == 0
+
+
+def test_translation_user_preset_add_delete_and_slug() -> None:
+    assert slugify_translation_preset_name(" Mi Preset! ") == "mi-preset"
+    base = validate_config(
+        {
+            "translation_decode_preset": "custom",
+            "translation_profiles": {
+                "custom": {
+                    "beam_size": 5,
+                    "length_penalty": 1.2,
+                    "no_repeat_ngram_size": 2,
+                },
+            },
+        }
+    )
+    with_user = add_translation_user_preset(base, "Mi Preset")
+    assert with_user["translation_decode_preset"] == "mi-preset"
+    assert with_user["translation_profiles"]["mi-preset"]["beam_size"] == 5
+
+    try:
+        add_translation_user_preset(with_user, "balanced")
+        raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+
+    deleted = delete_translation_user_preset(with_user, "mi-preset")
+    assert "mi-preset" not in deleted["translation_profiles"]
+    assert deleted["translation_decode_preset"] == "custom"
+    assert deleted["translation_profiles"]["custom"]["beam_size"] == 5
+
+    try:
+        delete_translation_user_preset(deleted, "quality")
+        raise AssertionError("expected ValueError")
+    except ValueError:
+        pass
+
+
+def test_save_and_load_roundtrip_preserves_translation_decode(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    save_config(
+        {
+            "translation_decode_preset": "custom",
+            "translation_profiles": {
+                "custom": {
+                    "beam_size": 5,
+                    "length_penalty": 1.2,
+                    "no_repeat_ngram_size": 2,
+                },
+                "live-talk": {
+                    "beam_size": 3,
+                    "length_penalty": 1.0,
+                    "no_repeat_ngram_size": 3,
+                },
+            },
+        },
+        path,
+    )
+    loaded = load_config(path)
+    assert loaded["translation_decode_preset"] == "custom"
+    assert loaded["translation_profiles"]["custom"]["beam_size"] == 5
+    assert loaded["translation_profiles"]["live-talk"]["beam_size"] == 3
+    assert (
+        loaded["translation_profiles"]["quality"]
+        == TRANSLATION_FACTORY_PRESETS["quality"]
+    )
