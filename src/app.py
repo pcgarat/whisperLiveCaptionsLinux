@@ -54,11 +54,6 @@ _TRANSLATION_KEYS = (
     "translation_decode_preset",
     "translation_profiles",
 )
-_DISPLAY_KEYS = (
-    "captions_show_partials",
-    "captions_allow_rewrite",
-    "second_line_mode",
-)
 
 
 class AppController:
@@ -154,10 +149,20 @@ class AppController:
     def _start_pipeline(self) -> None:
         if self.pipeline is not None:
             self.pipeline.stop()
+        self._drain_caption_queue()
+        if self.overlay is not None:
+            self.overlay.reset_caption_stream()
         self.pipeline = AsrPipeline(
             self.config, self.queue, tracer=self._tracer
         )
         self.pipeline.start()
+
+    def _drain_caption_queue(self) -> None:
+        while True:
+            try:
+                self.queue.get_nowait()
+            except queue.Empty:
+                break
 
     def _restart_pipeline_safe(self) -> None:
         assert self.overlay is not None
@@ -172,6 +177,8 @@ class AppController:
         if self.pipeline is None:
             return
         try:
+            # Settings/presets reasignan self.config; el pipeline debe ver el mismo dict.
+            self.pipeline.config = self.config
             self.pipeline.apply_translation_settings(self.config)
         except Exception as exc:
             assert self.overlay is not None
@@ -224,13 +231,13 @@ class AppController:
         if asr_restart:
             self._restart_pipeline_safe()
         else:
+            if self.pipeline is not None:
+                # Evitar config huérfana tras self.config = validate_config(...).
+                self.pipeline.config = self.config
             if latency_only and self.pipeline is not None:
                 self.pipeline.apply_latency_settings(self.config)
             if translation_only:
                 self._hot_swap_translator()
-            if self.pipeline is not None:
-                for key in _DISPLAY_KEYS:
-                    self.pipeline.config[key] = self.config[key]
         return applied
 
     def _merge_live_geometry(self, cfg: dict, settings_dlg: SettingsDialog | None) -> dict:

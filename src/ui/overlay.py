@@ -734,6 +734,14 @@ class SubtitleOverlay(QtWidgets.QWidget):
         else:
             self._ensure_on_top(force_restack=True)
 
+    def reset_caption_stream(self) -> None:
+        """Alinea el overlay con un pipeline ASR nuevo (seq reiniciado en 0)."""
+        self._caption_seq = 0
+        self._partial_text = ""
+        self._phrase_final = ""
+        self._phrase_translated = ""
+        self._pending_new_phrase = True
+
     def _show_partials(self) -> bool:
         return bool(self.config.get("captions_show_partials", False))
 
