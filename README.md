@@ -56,7 +56,7 @@ El toggle de traducción hace **hot-swap** del traductor (no recarga Whisper).
 
 En Settings, barra **Preset general** (encima de las pestañas):
 
-- Al instalar hay un preset de fábrica: `default` (EN→ES con NLLB sticky; misma config de referencia del producto). Queda activo en el primer arranque y no se puede borrar.
+- Al instalar hay un preset de fábrica: `default` (EN→ES con NLLB; misma config de referencia del producto). Queda activo en el primer arranque y no se puede borrar.
 - **Guardar como…** crea más snapshots de *toda* la config (captura, latencia, traducción, apariencia, geometría).
 - **Guardar** sobrescribe el preset activo con el estado actual.
 - **Borrar** elimina el preset (con confirmación); no revierte la config viva.
