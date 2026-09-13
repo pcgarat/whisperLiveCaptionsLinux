@@ -172,7 +172,8 @@ def test_emit_committed_translates_delta_and_appends_flag() -> None:
     pipeline.stop()
 
 
-def test_emit_committed_skips_rewind() -> None:
+def test_emit_committed_shorten_still_emits_and_allows_growth() -> None:
+    """Un acortamiento del streamer no debe bloquear commits posteriores."""
     q: queue.Queue = queue.Queue()
     t = RecordingTranslator()
     cfg = validate_config(
@@ -192,13 +193,25 @@ def test_emit_committed_skips_rewind() -> None:
 
     pipeline._emit_committed("Hello world", language="en", now=2.0)
     pipeline.flush_translations()
-    assert q.empty()
-    assert t.calls == []
+    pipeline._emit_committed("Hello world again", language="en", now=3.0)
+    pipeline.flush_translations()
+
+    items = []
+    while True:
+        try:
+            items.append(q.get_nowait())
+        except queue.Empty:
+            break
+
+    asr = [i for i in items if i.translated_text is None]
+    assert [i.text for i in asr] == ["Hello world", "Hello world again"]
+    assert any(i.translated_text == "ES:Hello world" for i in items)
+    assert any(i.translated_text == "ES:again" for i in items)
     pipeline.stop()
 
 
 def test_tx_worker_coalesces_to_latest_span() -> None:
-    """Si hay backlog, traduce desde la última base hasta el committed más reciente."""
+    """Con backlog: emite lo ya traducido y luego el delta hasta lo último."""
     q: queue.Queue = queue.Queue()
     gate = threading.Event()
     release = threading.Event()
@@ -242,9 +255,67 @@ def test_tx_worker_coalesces_to_latest_span() -> None:
         if item.translated_text is not None:
             tx_items.append(item)
 
-    # Primera TX (Hello) puede haberse descartado por coalesce; la final cubre el span.
+    assert len(tx_items) >= 2
+    assert tx_items[0].translated_text == "ES:Hello"
+    assert tx_items[0].translation_append is False
     assert tx_items[-1].seq == 3
-    assert tx_items[-1].translated_text == "ES:Hello world today"
-    assert tx_items[-1].translation_append is False
-    assert any(call[0] == "Hello world today" for call in t.calls)
+    assert tx_items[-1].translated_text == "ES:world today"
+    assert tx_items[-1].translation_append is True
+    pipeline.stop()
+
+
+def test_tx_worker_does_not_starve_under_continuous_newer() -> None:
+    """Si siempre hay un commit más nuevo al acabar el decode, igual debe emitir."""
+    q: queue.Queue = queue.Queue()
+    started = threading.Event()
+    release = threading.Event()
+    translate_count = 0
+    lock = threading.Lock()
+
+    class BlockingTranslator(RecordingTranslator):
+        def translate(
+            self,
+            text: str,
+            source_lang: str,
+            target_lang: str = "es",
+            decode: dict[str, float | int] | None = None,
+        ) -> str:
+            nonlocal translate_count
+            with lock:
+                translate_count += 1
+                n = translate_count
+            if n == 1:
+                started.set()
+                release.wait(timeout=2.0)
+            return super().translate(text, source_lang, target_lang, decode)
+
+    t = BlockingTranslator()
+    cfg = validate_config(
+        {
+            "translation_enabled": True,
+            "language": "en",
+            "translation_target": "es",
+            "device": "cpu",
+        }
+    )
+    pipeline = AsrPipeline(cfg, q, translator=t)
+    pipeline._emit_committed("One", language="en", now=1.0)
+    assert started.wait(timeout=2.0)
+    pipeline._emit_committed("One two", language="en", now=2.0)
+    pipeline._emit_committed("One two three", language="en", now=3.0)
+    pipeline._emit_committed("One two three four", language="en", now=4.0)
+    release.set()
+    pipeline.flush_translations()
+
+    tx_items = []
+    while True:
+        try:
+            item = q.get_nowait()
+        except queue.Empty:
+            break
+        if item.translated_text is not None:
+            tx_items.append(item)
+
+    assert tx_items, "starvation: no llegó ninguna traducción"
+    assert any("four" in (i.translated_text or "") or i.seq == 4 for i in tx_items)
     pipeline.stop()

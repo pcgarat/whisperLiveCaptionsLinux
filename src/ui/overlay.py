@@ -512,6 +512,16 @@ class SubtitleOverlay(QtWidgets.QWidget):
         else:
             self._translated_text = text
 
+    def _apply_final_text(self, text: str) -> None:
+        """Actualiza el EN confirmado sin acortarlo por una TX de un prefijo."""
+        if not text:
+            return
+        if not self._final_text:
+            self._final_text = text
+            return
+        if text.startswith(self._final_text) or not self._final_text.startswith(text):
+            self._final_text = text
+
     def _poll_queue(self) -> None:
         updated = False
         while True:
@@ -521,24 +531,26 @@ class SubtitleOverlay(QtWidgets.QWidget):
                 break
             if item.is_final:
                 if item.seq < self._caption_seq:
-                    # Traducción o revisión tardía de una frase que ya no está en pantalla.
+                    # Traducción tardía del mismo EN que aún se muestra.
+                    if (
+                        item.translated_text is not None
+                        and item.text == self._final_text
+                    ):
+                        self._apply_translated_text(
+                            item.translated_text, append=item.translation_append
+                        )
+                        updated = True
                     continue
-                prev_final = self._final_text
                 if item.seq > self._caption_seq:
-                    extending = bool(prev_final) and item.text.startswith(prev_final)
                     self._caption_seq = item.seq
-                    self._final_text = item.text
+                    self._apply_final_text(item.text)
                     self._partial_text = ""
                     if item.translated_text is not None:
                         self._apply_translated_text(
                             item.translated_text, append=item.translation_append
                         )
-                    elif not extending:
-                        # Nuevo segmento sin ES aún: no dejar la frase anterior.
-                        self._translated_text = ""
                 else:
-                    if item.text:
-                        self._final_text = item.text
+                    self._apply_final_text(item.text)
                     self._partial_text = ""
                     if item.translated_text is not None:
                         self._apply_translated_text(

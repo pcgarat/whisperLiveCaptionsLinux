@@ -104,7 +104,71 @@ def test_stale_translation_does_not_overwrite(qapp: QtWidgets.QApplication) -> N
     ov.close()
 
 
-def test_new_segment_clears_old_translation_until_ready(
+def test_translation_prefix_does_not_shrink_final(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    ov, q = _overlay(qapp)
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello world today",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            seq=3,
+        )
+    )
+    ov._poll_queue()
+    q.put(
+        CaptionUpdate(
+            text="Hello",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Hola",
+            seq=3,
+            translation_append=False,
+        )
+    )
+    ov._poll_queue()
+    assert ov._final_text == "Hello world today"
+    assert ov._translated_text == "Hola"
+    ov.close()
+
+
+def test_late_translation_applies_if_same_final_text(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    ov, q = _overlay(qapp)
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello world",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            seq=2,
+        )
+    )
+    ov._poll_queue()
+    q.put(
+        CaptionUpdate(
+            text="Hello world",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Hola mundo",
+            seq=1,
+            translation_append=False,
+        )
+    )
+    ov._poll_queue()
+    assert ov._caption_seq == 2
+    assert ov._translated_text == "Hola mundo"
+    ov.close()
+
+
+def test_new_segment_keeps_old_translation_until_ready(
     qapp: QtWidgets.QApplication,
 ) -> None:
     ov, q = _overlay(qapp)
@@ -132,7 +196,7 @@ def test_new_segment_clears_old_translation_until_ready(
     )
     ov._poll_queue()
     assert ov._final_text == "Brand new"
-    assert ov._translated_text == ""
+    assert ov._translated_text == "Viejo"
     q.put(
         CaptionUpdate(
             text="Brand new",
