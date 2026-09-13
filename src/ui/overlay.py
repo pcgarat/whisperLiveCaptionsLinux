@@ -8,7 +8,7 @@ from typing import Any
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
-from src.asr.languages import language_label
+from src.asr.languages import AVAILABLE_LANGUAGES, language_label
 from src.asr.types import CaptionUpdate
 
 # Cola visible del overlay: suficiente para scrollear, sin crecer sin límite.
@@ -23,6 +23,8 @@ _MIN_WINDOW_WIDTH = 300
 _MAX_WINDOW_WIDTH = 2400
 _MIN_WINDOW_HEIGHT = 120
 _MAX_WINDOW_HEIGHT = 1600
+# Margen inferior en primer arranque / reclamp (no pegar al borde).
+_BOTTOM_MARGIN_PX = 48
 
 # (left, right, top, bottom)
 ResizeEdge = tuple[bool, bool, bool, bool]
@@ -235,6 +237,17 @@ class SubtitleOverlay(QtWidgets.QWidget):
                 return None
         return None
 
+    def _default_bottom_center(self) -> tuple[int, int] | None:
+        """Abajo-centro del monitor primario con margen inferior."""
+        screen = QtGui.QGuiApplication.primaryScreen()
+        if screen is None:
+            return None
+        geo = screen.availableGeometry()
+        x = geo.x() + (geo.width() - self.width()) // 2
+        y = geo.bottom() - self.height() - _BOTTOM_MARGIN_PX
+        y = max(geo.top(), y)
+        return x, y
+
     def _clamp_to_screens(self, x: int, y: int) -> tuple[int, int]:
         screens = QtGui.QGuiApplication.screens()
         if not screens:
@@ -244,10 +257,8 @@ class SubtitleOverlay(QtWidgets.QWidget):
             if screen.geometry().contains(point):
                 return x, y
         # Si quedó fuera (cambio de monitor), ancla abajo-centro del primario.
-        geo = QtGui.QGuiApplication.primaryScreen().availableGeometry()
-        return geo.center().x() - self.width() // 2, geo.bottom() - max(
-            180, self.height() + 40
-        )
+        fallback = self._default_bottom_center()
+        return fallback if fallback is not None else (x, y)
 
     def _restore_geometry(self) -> None:
         """Restaura tamaño + posición guardados (el WM puede resetear al show/flags)."""
@@ -262,10 +273,9 @@ class SubtitleOverlay(QtWidgets.QWidget):
                 x, y = self._clamp_to_screens(saved[0], saved[1])
                 self.move(x, y)
             else:
-                screen = QtGui.QGuiApplication.primaryScreen()
-                if screen is not None:
-                    geo = screen.availableGeometry()
-                    self.move(geo.center().x() - self.width() // 2, geo.bottom() - 220)
+                fallback = self._default_bottom_center()
+                if fallback is not None:
+                    self.move(*fallback)
         finally:
             self._ignore_move_save = False
 
@@ -693,7 +703,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
             self._ensure_on_top()
 
     def _show_partials(self) -> bool:
-        return bool(self.config.get("captions_show_partials", True))
+        return bool(self.config.get("captions_show_partials", False))
 
     def _allow_rewrite(self) -> bool:
         return bool(self.config.get("captions_allow_rewrite", True))
@@ -773,14 +783,8 @@ class SubtitleOverlay(QtWidgets.QWidget):
             self.on_translation_changed()
 
     def _show_language_menu(self) -> None:
-        langs = self.config.get("installed_languages") or ["en", "es"]
-        if not isinstance(langs, list) or not langs:
-            langs = ["en", "es"]
         menu = QtWidgets.QMenu(self)
-        for code in langs:
-            lang = str(code).strip().lower()
-            if not lang:
-                continue
+        for lang in AVAILABLE_LANGUAGES:
             action = menu.addAction(language_label(lang))
             action.triggered.connect(
                 lambda _checked=False, c=lang: self._set_language(c)

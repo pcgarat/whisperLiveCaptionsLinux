@@ -25,15 +25,20 @@ def test_load_missing_returns_defaults(tmp_path: Path) -> None:
     assert cfg["language"] == DEFAULTS["language"]
     assert cfg["model"] == DEFAULTS["model"]
     assert cfg["latency_mode"] == "stable"
-    assert cfg["latency_profiles"]["stable"] == LATENCY_FACTORY_PRESETS["stable"]
-    assert cfg["latency_profiles"]["low"] == LATENCY_FACTORY_PRESETS["low"]
+    assert (
+        cfg["latency_profiles"]["stable"]
+        == validate_config({})["latency_profiles"]["stable"]
+    )
+    assert (
+        cfg["latency_profiles"]["low"] == validate_config({})["latency_profiles"]["low"]
+    )
     assert cfg["translation_enabled"] is False
     assert cfg["translation_target"] == "es"
     assert cfg["translation_sticky_mode"] == "off"
-    assert cfg["second_line_mode"] == "live_asr"
-    assert cfg["captions_show_partials"] is True
+    assert cfg["second_line_mode"] == "none"
+    assert cfg["captions_show_partials"] is False
     assert cfg["captions_allow_rewrite"] is True
-    assert cfg["installed_languages"] == ["en", "es"]
+    assert cfg["installed_languages"] == ["en", "es", "fr", "de", "it", "pt"]
     assert cfg["translator_model"] == "nllb-200-distilled-ct2"
     assert cfg["translation_decode_preset"] == "balanced"
     assert (
@@ -43,8 +48,10 @@ def test_load_missing_returns_defaults(tmp_path: Path) -> None:
     assert (
         cfg["translation_profiles"]["custom"] == TRANSLATION_FACTORY_PRESETS["balanced"]
     )
-    assert cfg["app_preset"] is None
-    assert cfg["app_presets"] == {}
+    assert cfg["app_preset"] == DEFAULTS["app_preset"]
+    assert set(cfg["app_presets"]) == set(DEFAULTS["app_presets"])
+    assert cfg["text_align"] == "left"
+    assert cfg["font_size"] == 26
 
 
 def test_validate_clamps_ranges() -> None:
@@ -70,12 +77,12 @@ def test_validate_clamps_ranges() -> None:
     assert cfg["text_align"] == "center"
     assert cfg["latency_mode"] == "stable"
     assert cfg["latency_profiles"]["stable"]["agreement_n"] == 5
-    assert cfg["latency_profiles"]["stable"]["max_latency_sec"] == 0.5
+    assert cfg["latency_profiles"]["stable"]["max_latency_sec"] == 0.2
     assert cfg["latency_profiles"]["stable"]["min_chunk_seconds"] == 0.2
 
 
 def test_window_height_clamps() -> None:
-    assert validate_config({})["window_height"] is None
+    assert validate_config({})["window_height"] == DEFAULTS["window_height"]
     assert validate_config({"window_height": 500})["window_height"] == 500
     assert validate_config({"window_height": 50})["window_height"] == 120
     assert validate_config({"window_height": 9999})["window_height"] == 1600
@@ -83,9 +90,9 @@ def test_window_height_clamps() -> None:
 
 def test_settings_window_geometry_defaults_and_clamps() -> None:
     cfg = validate_config({})
-    assert cfg["settings_window_pos"] is None
-    assert cfg["settings_window_width"] == 560
-    assert cfg["settings_window_height"] == 720
+    assert cfg["settings_window_pos"] == DEFAULTS["settings_window_pos"]
+    assert cfg["settings_window_width"] == DEFAULTS["settings_window_width"]
+    assert cfg["settings_window_height"] == DEFAULTS["settings_window_height"]
     clamped = validate_config(
         {
             "settings_window_width": 100,
@@ -100,7 +107,7 @@ def test_settings_window_geometry_defaults_and_clamps() -> None:
 
 
 def test_text_align_normalize() -> None:
-    assert validate_config({})["text_align"] == "center"
+    assert validate_config({})["text_align"] == "left"
     assert validate_config({"text_align": "left"})["text_align"] == "left"
     assert validate_config({"text_align": "LEFT"})["text_align"] == "left"
     assert validate_config({"text_align": "right"})["text_align"] == "center"
@@ -179,7 +186,7 @@ def test_migrate_legacy_show_asr_line_to_second_line_mode() -> None:
     assert migrated["second_line_mode"] == "original"
     assert "show_asr_line" not in migrated
     assert (
-        validate_config({"second_line_mode": "nope"})["second_line_mode"] == "live_asr"
+        validate_config({"second_line_mode": "nope"})["second_line_mode"] == "none"
     )
 
 
@@ -197,11 +204,11 @@ def test_translation_sticky_mode_defaults_and_clamp() -> None:
 
 
 def test_captions_display_policy_defaults_and_bool() -> None:
-    assert validate_config({})["captions_show_partials"] is True
+    assert validate_config({})["captions_show_partials"] is False
     assert validate_config({})["captions_allow_rewrite"] is True
-    assert validate_config({"captions_show_partials": False})[
+    assert validate_config({"captions_show_partials": True})[
         "captions_show_partials"
-    ] is False
+    ] is True
     assert validate_config({"captions_allow_rewrite": 0})[
         "captions_allow_rewrite"
     ] is False

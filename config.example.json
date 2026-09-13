@@ -1,6 +1,6 @@
 {
-  "language": "en",
-  "model": "small",
+  "language": "es",
+  "model": "medium",
   "compute_type": "float16",
   "device": "cuda",
   "audio_monitor": "bluez_output.44_73_D6_C9_A1_5F.1.monitor",
@@ -10,12 +10,12 @@
   "latency_profiles": {
     "stable": {
       "agreement_n": 1,
-      "max_latency_sec": 0.6,
+      "max_latency_sec": 0.8,
       "min_chunk_seconds": 0.8
     },
     "low": {
       "agreement_n": 1,
-      "max_latency_sec": 1.5,
+      "max_latency_sec": 0.35,
       "min_chunk_seconds": 0.35
     }
   },
@@ -27,11 +27,11 @@
     "it",
     "pt"
   ],
-  "translation_enabled": true,
+  "translation_enabled": false,
   "translation_target": "es",
   "translation_sticky_mode": "off",
   "second_line_mode": "none",
-  "captions_show_partials": true,
+  "captions_show_partials": false,
   "captions_allow_rewrite": true,
   "translator_model": "nllb-200-distilled-ct2",
   "translation_decode_preset": "balanced",
@@ -64,21 +64,15 @@
   "bg_alpha": 0.41,
   "padding": 20,
   "text_align": "left",
-  "window_pos": [
-    528,
-    983
-  ],
+  "window_pos": null,
   "window_width": 900,
   "window_height": 170,
-  "settings_window_pos": [
-    565,
-    220
-  ],
-  "settings_window_width": 560,
-  "settings_window_height": 720,
-  "app_preset": "inglés",
+  "settings_window_pos": null,
+  "settings_window_width": 858,
+  "settings_window_height": 992,
+  "app_preset": "Traduccion NLLB-200-Distilled-CT2",
   "app_presets": {
-    "inglés": {
+    "Traduccion NLLB-200-Distilled-CT2": {
       "language": "en",
       "model": "small",
       "compute_type": "float16",
@@ -90,12 +84,12 @@
       "latency_profiles": {
         "stable": {
           "agreement_n": 1,
-          "max_latency_sec": 1.0,
+          "max_latency_sec": 0.5,
           "min_chunk_seconds": 0.8
         },
         "low": {
           "agreement_n": 1,
-          "max_latency_sec": 1.5,
+          "max_latency_sec": 0.35,
           "min_chunk_seconds": 0.35
         }
       },
@@ -144,18 +138,12 @@
       "bg_alpha": 0.41,
       "padding": 20,
       "text_align": "left",
-      "window_pos": [
-        565,
-        977
-      ],
+      "window_pos": null,
       "window_width": 900,
       "window_height": 170,
-      "settings_window_pos": [
-        565,
-        220
-      ],
-      "settings_window_width": 560,
-      "settings_window_height": 720,
+      "settings_window_pos": null,
+      "settings_window_width": 762,
+      "settings_window_height": 993,
       "opt_prefer_low_latency": false,
       "opt_prefer_fast_translation": false,
       "opt_nllb_on_cpu": false,
@@ -165,9 +153,9 @@
       "opt_short_caption_beam_cap": true,
       "min_chunk_seconds": 0.8,
       "agreement_n": 1,
-      "max_latency_sec": 1.0
+      "max_latency_sec": 0.5
     },
-    "whispermediumtranslate": {
+    "Traduccion con Whisper": {
       "language": "es",
       "model": "medium",
       "compute_type": "float16",
@@ -184,7 +172,7 @@
         },
         "low": {
           "agreement_n": 1,
-          "max_latency_sec": 1.5,
+          "max_latency_sec": 0.35,
           "min_chunk_seconds": 0.35
         }
       },
@@ -233,18 +221,12 @@
       "bg_alpha": 0.41,
       "padding": 20,
       "text_align": "left",
-      "window_pos": [
-        563,
-        977
-      ],
+      "window_pos": null,
       "window_width": 900,
       "window_height": 170,
-      "settings_window_pos": [
-        561,
-        98
-      ],
-      "settings_window_width": 718,
-      "settings_window_height": 801,
+      "settings_window_pos": null,
+      "settings_window_width": 858,
+      "settings_window_height": 878,
       "opt_prefer_low_latency": false,
       "opt_prefer_fast_translation": false,
       "opt_nllb_on_cpu": false,
@@ -266,5 +248,5 @@
   "opt_short_caption_beam_cap": true,
   "min_chunk_seconds": 0.8,
   "agreement_n": 1,
-  "max_latency_sec": 0.6
+  "max_latency_sec": 0.8
 }

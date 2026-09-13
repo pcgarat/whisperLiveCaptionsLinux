@@ -5,9 +5,11 @@ from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
+from src.asr.languages import AVAILABLE_LANGUAGES
+
 LATENCY_FACTORY_PRESETS: dict[str, dict[str, float | int]] = {
-    "stable": {"agreement_n": 2, "max_latency_sec": 3.0, "min_chunk_seconds": 0.8},
-    "low": {"agreement_n": 1, "max_latency_sec": 1.0, "min_chunk_seconds": 0.35},
+    "stable": {"agreement_n": 2, "max_latency_sec": 0.8, "min_chunk_seconds": 0.8},
+    "low": {"agreement_n": 1, "max_latency_sec": 0.35, "min_chunk_seconds": 0.35},
 }
 
 # Decoding NLLB (fábrica). `custom` no es fábrica: perfil editable persistente.
@@ -43,55 +45,98 @@ TRANSLATION_STICKY_LABELS: dict[str, str] = {
     "partials": "Sticky + parciales",
 }
 
-DEFAULTS: dict[str, Any] = {
-    "language": "en",
-    "model": "medium",
-    "compute_type": "float16",
-    "device": "cuda",
-    "audio_monitor": "",
-    "buffer_trimming_sec": 15.0,
-    "use_vad": True,
-    "latency_mode": "stable",
-    "latency_profiles": deepcopy(LATENCY_FACTORY_PRESETS),
-    "installed_languages": ["en", "es"],
-    "translation_enabled": False,
-    "translation_target": "es",
-    "translation_sticky_mode": "off",
-    "second_line_mode": "live_asr",
-    "captions_show_partials": True,
-    "captions_allow_rewrite": True,
-    "translator_model": "nllb-200-distilled-ct2",
-    "translation_decode_preset": "balanced",
-    "translation_profiles": {
-        **deepcopy(TRANSLATION_FACTORY_PRESETS),
-        "custom": deepcopy(TRANSLATION_FACTORY_PRESETS["balanced"]),
-    },
-    "always_on_top": True,
-    "font_size": 28,
-    "font_color": "#ffffff",
-    "bg_color": "#000000",
-    "bg_alpha": 0.55,
-    "padding": 24,
-    "text_align": "center",
-    "window_pos": None,
-    "window_width": 900,
-    "window_height": None,
-    "settings_window_pos": None,
-    "settings_window_width": 560,
-    "settings_window_height": 720,
-    "app_preset": None,
-    "app_presets": {},
-}
+APP_PRESET_WHISPER = "Traduccion con Whisper"
+APP_PRESET_NLLB = "Traduccion NLLB-200-Distilled-CT2"
 
 # Meta de presets generales: no se anidan dentro de cada snapshot.
 APP_PRESET_META_KEYS = frozenset({"app_preset", "app_presets"})
 
 CONFIG_NAME = "config.json"
+CONFIG_EXAMPLE_NAME = "config.example.json"
+
+
+def _builtin_defaults() -> dict[str, Any]:
+    """Fallback si no hay config.example.json (p. ej. empaquetado mínimo)."""
+    return {
+        "language": "es",
+        "model": "medium",
+        "compute_type": "float16",
+        "device": "cuda",
+        "audio_monitor": "",
+        "buffer_trimming_sec": 15.0,
+        "use_vad": True,
+        "latency_mode": "stable",
+        "latency_profiles": {
+            "stable": {
+                "agreement_n": 1,
+                "max_latency_sec": 0.8,
+                "min_chunk_seconds": 0.8,
+            },
+            "low": {
+                "agreement_n": 1,
+                "max_latency_sec": 0.35,
+                "min_chunk_seconds": 0.35,
+            },
+        },
+        "installed_languages": list(AVAILABLE_LANGUAGES.keys()),
+        "translation_enabled": False,
+        "translation_target": "es",
+        "translation_sticky_mode": "off",
+        "second_line_mode": "none",
+        "captions_show_partials": False,
+        "captions_allow_rewrite": True,
+        "translator_model": "nllb-200-distilled-ct2",
+        "translation_decode_preset": "balanced",
+        "translation_profiles": {
+            **deepcopy(TRANSLATION_FACTORY_PRESETS),
+            "custom": deepcopy(TRANSLATION_FACTORY_PRESETS["balanced"]),
+        },
+        "always_on_top": True,
+        "font_size": 26,
+        "font_color": "#ffffff",
+        "bg_color": "#000000",
+        "bg_alpha": 0.41,
+        "padding": 20,
+        "text_align": "left",
+        "window_pos": None,
+        "window_width": 900,
+        "window_height": 170,
+        "settings_window_pos": None,
+        "settings_window_width": 858,
+        "settings_window_height": 992,
+        "app_preset": APP_PRESET_WHISPER,
+        "app_presets": {},
+    }
+
+
+def _shipped_defaults() -> dict[str, Any]:
+    """Defaults = config.example.json del repo cuando existe."""
+    base = _builtin_defaults()
+    example = Path(__file__).resolve().parent.parent / CONFIG_EXAMPLE_NAME
+    if not example.is_file():
+        return base
+    try:
+        raw = json.loads(example.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError, TypeError):
+        return base
+    if not isinstance(raw, dict):
+        return base
+    merged = deepcopy(base)
+    merged.update(deepcopy(raw))
+    return merged
+
+
+DEFAULTS: dict[str, Any] = _shipped_defaults()
 
 
 def default_config_path(root: Path | None = None) -> Path:
     base = root or Path.cwd()
     return base / CONFIG_NAME
+
+
+def default_example_config_path(root: Path | None = None) -> Path:
+    base = root or Path.cwd()
+    return base / CONFIG_EXAMPLE_NAME
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -104,7 +149,7 @@ def _clamp_profile(
     src = factory if not isinstance(raw, dict) else {**factory, **raw}
     return {
         "agreement_n": int(_clamp(int(src["agreement_n"]), 1, 5)),
-        "max_latency_sec": float(_clamp(float(src["max_latency_sec"]), 0.5, 5.0)),
+        "max_latency_sec": float(_clamp(float(src["max_latency_sec"]), 0.2, 3.0)),
         "min_chunk_seconds": float(_clamp(float(src["min_chunk_seconds"]), 0.2, 5.0)),
     }
 
@@ -135,6 +180,19 @@ def _migrate_latency_profiles(
             {**LATENCY_FACTORY_PRESETS[mode], **legacy}, LATENCY_FACTORY_PRESETS[mode]
         )
     return profiles
+
+
+def _latency_profiles_migrate_source(
+    raw: dict[str, Any], cfg: dict[str, Any]
+) -> dict[str, Any]:
+    """Elige la fuente de migración: input, legacy top-level, o DEFAULTS ya en cfg."""
+    if isinstance(raw.get("latency_profiles"), dict):
+        return raw
+    if any(
+        key in raw for key in ("agreement_n", "max_latency_sec", "min_chunk_seconds")
+    ):
+        return raw
+    return {"latency_profiles": cfg.get("latency_profiles")}
 
 
 def effective_latency_profile(cfg: dict[str, Any]) -> dict[str, float | int]:
@@ -324,7 +382,7 @@ def _normalize_installed_languages(raw: Any, language: str) -> list[str]:
     if language and language not in seen:
         out.insert(0, language)
     if not out:
-        out = ["en", "es"]
+        out = list(DEFAULTS["installed_languages"])
     return out
 
 
@@ -383,21 +441,32 @@ def _normalize_app_presets(raw: Any) -> dict[str, dict[str, Any]]:
     if not isinstance(raw, dict):
         return {}
     out: dict[str, dict[str, Any]] = {}
+    seen_lower: set[str] = set()
     for key, blob in raw.items():
-        slug = str(key).strip().lower()
-        if not slug or not isinstance(blob, dict):
+        name = str(key).strip()
+        if not name or not isinstance(blob, dict):
             continue
-        out[slug] = snapshot_app_config(blob)
+        low = name.lower()
+        if low in seen_lower:
+            continue
+        seen_lower.add(low)
+        out[name] = snapshot_app_config(blob)
     return out
 
 
 def _normalize_app_preset_id(raw: Any, presets: dict[str, dict[str, Any]]) -> str | None:
     if raw is None:
         return None
-    slug = str(raw).strip().lower()
-    if not slug or slug not in presets:
+    key = str(raw).strip()
+    if not key:
         return None
-    return slug
+    if key in presets:
+        return key
+    low = key.lower()
+    for name in presets:
+        if name.lower() == low:
+            return name
+    return None
 
 
 def list_app_preset_ids(cfg: dict[str, Any]) -> list[str]:
@@ -528,7 +597,7 @@ def validate_config(
     )
     cfg["second_line_mode"] = _normalize_second_line_mode(raw)
     cfg.pop("show_asr_line", None)
-    cfg["captions_show_partials"] = bool(cfg.get("captions_show_partials", True))
+    cfg["captions_show_partials"] = bool(cfg.get("captions_show_partials", False))
     cfg["captions_allow_rewrite"] = bool(cfg.get("captions_allow_rewrite", True))
     cfg["translation_target"] = (
         str(cfg.get("translation_target") or "es").strip().lower() or "es"
@@ -542,7 +611,10 @@ def validate_config(
         cfg["language"],
     )
 
-    cfg["latency_profiles"] = _migrate_latency_profiles(raw, cfg["latency_mode"])
+    cfg["latency_profiles"] = _migrate_latency_profiles(
+        _latency_profiles_migrate_source(raw, cfg),
+        cfg["latency_mode"],
+    )
     cfg["translation_profiles"] = _migrate_translation_profiles(raw)
     cfg["translation_decode_preset"] = _normalize_translation_decode_preset(
         cfg.get("translation_decode_preset"),
@@ -563,10 +635,14 @@ def validate_config(
         cfg["app_presets"] = {}
         return cfg
 
-    cfg["app_presets"] = _normalize_app_presets(raw.get("app_presets"))
-    cfg["app_preset"] = _normalize_app_preset_id(
-        raw.get("app_preset"), cfg["app_presets"]
+    presets_raw = (
+        raw.get("app_presets") if "app_presets" in raw else cfg.get("app_presets")
     )
+    cfg["app_presets"] = _normalize_app_presets(presets_raw)
+    preset_id_raw = (
+        raw.get("app_preset") if "app_preset" in raw else cfg.get("app_preset")
+    )
+    cfg["app_preset"] = _normalize_app_preset_id(preset_id_raw, cfg["app_presets"])
 
     return cfg
 

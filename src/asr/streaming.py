@@ -22,7 +22,7 @@ class LocalAgreementStreamer:
         clock: Callable[[], float] | None = None,
     ) -> None:
         self.agreement_n = max(1, int(agreement_n))
-        self.max_latency_sec = max(0.5, float(max_latency_sec))
+        self.max_latency_sec = max(0.2, float(max_latency_sec))
         self._clock = clock or time.monotonic
         self._hypotheses: list[str] = []
         self._committed = ""

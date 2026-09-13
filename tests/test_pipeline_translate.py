@@ -498,6 +498,7 @@ def test_sticky_partials_translates_display() -> None:
             "language": "en",
             "translation_target": "es",
             "translation_sticky_mode": "partials",
+            "captions_show_partials": True,
             "device": "cpu",
         }
     )

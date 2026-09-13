@@ -13,9 +13,14 @@ from src.config import (
 
 
 def test_app_preset_defaults() -> None:
+    from src.config import APP_PRESET_NLLB, APP_PRESET_WHISPER, DEFAULTS
+
     cfg = validate_config({})
-    assert cfg["app_preset"] is None
-    assert cfg["app_presets"] == {}
+    assert cfg["app_preset"] == DEFAULTS["app_preset"]
+    assert APP_PRESET_WHISPER in cfg["app_presets"]
+    assert APP_PRESET_NLLB in cfg["app_presets"]
+    assert cfg["app_presets"][APP_PRESET_WHISPER]["translation_enabled"] is False
+    assert cfg["app_presets"][APP_PRESET_NLLB]["translation_enabled"] is True
 
 
 def test_snapshot_excludes_meta_and_includes_geometry() -> None:
@@ -56,7 +61,8 @@ def test_save_as_apply_overwrite_delete() -> None:
     assert created["app_preset"] == "directo-es"
     assert "directo-es" in created["app_presets"]
     assert created["app_presets"]["directo-es"]["language"] == "en"
-    assert list_app_preset_ids(created) == ["directo-es"]
+    assert "directo-es" in list_app_preset_ids(created)
+    assert len(list_app_preset_ids(created)) >= 1
 
     tweaked = validate_config({**created, "language": "fr", "font_size": 50})
     applied = apply_app_preset(tweaked, "directo-es")
@@ -81,7 +87,7 @@ def test_save_as_apply_overwrite_delete() -> None:
 
     deleted = delete_app_preset(cleared, "directo-es")
     assert deleted["app_preset"] is None
-    assert deleted["app_presets"] == {}
+    assert "directo-es" not in deleted["app_presets"]
     assert deleted["language"] == "de"
 
 
@@ -96,7 +102,7 @@ def test_save_as_rejects_collision() -> None:
 
 def test_save_without_active_fails() -> None:
     try:
-        save_app_preset(validate_config({}))
+        save_app_preset(validate_config({"app_preset": None, "app_presets": {}}))
         raise AssertionError("expected no active preset")
     except ValueError as exc:
         assert "activo" in str(exc).lower()
