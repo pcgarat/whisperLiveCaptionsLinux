@@ -22,6 +22,11 @@ def test_load_missing_returns_defaults(tmp_path: Path) -> None:
     assert cfg["latency_mode"] == "stable"
     assert cfg["latency_profiles"]["stable"] == LATENCY_FACTORY_PRESETS["stable"]
     assert cfg["latency_profiles"]["low"] == LATENCY_FACTORY_PRESETS["low"]
+    assert cfg["translation_enabled"] is False
+    assert cfg["translation_target"] == "es"
+    assert cfg["show_asr_line"] is True
+    assert cfg["installed_languages"] == ["en", "es"]
+    assert cfg["translator_model"] == "nllb-200-distilled-ct2"
 
 
 def test_validate_clamps_ranges() -> None:
@@ -86,6 +91,35 @@ def test_save_and_load_roundtrip_preserves_profiles(tmp_path: Path) -> None:
     assert abs(loaded["bg_alpha"] - 0.33) < 1e-9
     assert loaded["latency_mode"] == "low"
     assert abs(loaded["latency_profiles"]["low"]["min_chunk_seconds"] - 0.4) < 1e-9
+
+
+def test_save_and_load_roundtrip_preserves_translation_flags(tmp_path: Path) -> None:
+    path = tmp_path / "config.json"
+    save_config(
+        {
+            "language": "en",
+            "translation_enabled": True,
+            "translation_target": "es",
+            "show_asr_line": False,
+            "installed_languages": ["en", "es", "fr"],
+            "translator_model": "nllb-200-distilled-ct2",
+        },
+        path,
+    )
+    loaded = load_config(path)
+    assert loaded["translation_enabled"] is True
+    assert loaded["translation_target"] == "es"
+    assert loaded["show_asr_line"] is False
+    assert loaded["installed_languages"] == ["en", "es", "fr"]
+    assert loaded["translator_model"] == "nllb-200-distilled-ct2"
+
+
+def test_installed_languages_includes_active_language() -> None:
+    cfg = validate_config({"language": "fr", "installed_languages": ["en", "es"]})
+    assert cfg["language"] == "fr"
+    assert cfg["installed_languages"][0] == "fr"
+    assert "en" in cfg["installed_languages"]
+    assert "es" in cfg["installed_languages"]
 
 
 def test_beam_size_for_mode() -> None:

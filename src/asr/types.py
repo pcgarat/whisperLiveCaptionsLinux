@@ -9,3 +9,4 @@ class CaptionUpdate:
     is_final: bool
     language: str
     ts_mono: float
+    translated_text: str | None = None

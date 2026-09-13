@@ -52,6 +52,7 @@ class AppController:
             on_open_settings=self.open_settings,
             on_close_app=self.shutdown,
             on_save_config=self._save_config,
+            on_restart_pipeline=self._restart_pipeline_safe,
         )
         self.overlay.show()
 
@@ -82,6 +83,13 @@ class AppController:
         self.pipeline = AsrPipeline(self.config, self.queue)
         self.pipeline.start()
 
+    def _restart_pipeline_safe(self) -> None:
+        assert self.overlay is not None
+        try:
+            self._start_pipeline()
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self.overlay, "Error al reiniciar ASR", str(exc))
+
     def open_settings(self) -> None:
         assert self.overlay is not None
         dlg = SettingsDialog(self.overlay, self.config)
@@ -99,6 +107,9 @@ class AppController:
             "use_vad",
             "latency_mode",
             "latency_profiles",
+            "translation_enabled",
+            "translation_target",
+            "translator_model",
         )
         restart_needed = any(new_cfg.get(k) != self.config.get(k) for k in restart_keys)
         self.config = new_cfg
@@ -106,10 +117,7 @@ class AppController:
         self.overlay.apply_config(self.config)
 
         if restart_needed:
-            try:
-                self._start_pipeline()
-            except Exception as exc:
-                QtWidgets.QMessageBox.critical(self.overlay, "Error al reiniciar ASR", str(exc))
+            self._restart_pipeline_safe()
 
     def shutdown(self) -> None:
         if self._shutting_down:

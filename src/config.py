@@ -20,6 +20,11 @@ DEFAULTS: dict[str, Any] = {
     "use_vad": True,
     "latency_mode": "stable",
     "latency_profiles": deepcopy(LATENCY_FACTORY_PRESETS),
+    "installed_languages": ["en", "es"],
+    "translation_enabled": False,
+    "translation_target": "es",
+    "show_asr_line": True,
+    "translator_model": "nllb-200-distilled-ct2",
     "always_on_top": True,
     "font_size": 28,
     "font_color": "#ffffff",
@@ -104,6 +109,25 @@ def beam_size_for_mode(mode: str) -> int:
     return 1 if mode == "low" else 5
 
 
+def _normalize_installed_languages(raw: Any, language: str) -> list[str]:
+    if isinstance(raw, list):
+        langs = [str(item).strip().lower() for item in raw if str(item).strip()]
+    else:
+        langs = list(DEFAULTS["installed_languages"])
+    # Mantener orden de aparición; language activo siempre disponible en el menú.
+    seen: set[str] = set()
+    out: list[str] = []
+    for code in langs:
+        if code not in seen:
+            seen.add(code)
+            out.append(code)
+    if language and language not in seen:
+        out.insert(0, language)
+    if not out:
+        out = ["en", "es"]
+    return out
+
+
 def validate_config(data: dict[str, Any]) -> dict[str, Any]:
     raw = dict(data)
     cfg = deepcopy(DEFAULTS)
@@ -122,6 +146,17 @@ def validate_config(data: dict[str, Any]) -> dict[str, Any]:
     cfg["use_vad"] = bool(cfg["use_vad"])
     cfg["always_on_top"] = bool(cfg.get("always_on_top", True))
     cfg["audio_monitor"] = str(cfg.get("audio_monitor") or "")
+    cfg["translation_enabled"] = bool(cfg.get("translation_enabled", False))
+    cfg["show_asr_line"] = bool(cfg.get("show_asr_line", True))
+    cfg["translation_target"] = str(cfg.get("translation_target") or "es").strip().lower() or "es"
+    cfg["translator_model"] = (
+        str(cfg.get("translator_model") or "nllb-200-distilled-ct2").strip()
+        or "nllb-200-distilled-ct2"
+    )
+    cfg["installed_languages"] = _normalize_installed_languages(
+        cfg.get("installed_languages"),
+        cfg["language"],
+    )
 
     cfg["latency_profiles"] = _migrate_latency_profiles(raw, cfg["latency_mode"])
 

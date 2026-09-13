@@ -21,15 +21,18 @@ class CaptionUpdate:
     is_final: bool
     language: str
     ts_mono: float
+    translated_text: str | None = None
 ```
 
 - `is_final=True`: texto confirmado (LocalAgreement).
+- `translated_text`: ES confirmado si traducción ON; la UI solo actualiza la línea ES cuando no es `None`.
 - Parcial: más discreto en UI; no bloquear el event loop al pintar.
 
 ## Streaming
 
 - Política en `src/asr/streaming.py` (LocalAgreement propia).
-- Extensiones futuras: stub `Translator` en `src/asr/translate.py`; `latency_mode` en config (`stable` | `low`).
+- Traducción: protocol `Translator` en `src/asr/translate.py` (Null / NLLB CT2); solo sobre confirmados.
+- `latency_mode` en config (`stable` | `low`).
 
 ## Errores
 

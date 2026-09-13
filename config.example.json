@@ -19,6 +19,11 @@
       "min_chunk_seconds": 0.35
     }
   },
+  "installed_languages": ["en", "es"],
+  "translation_enabled": false,
+  "translation_target": "es",
+  "show_asr_line": true,
+  "translator_model": "nllb-200-distilled-ct2",
   "always_on_top": true,
   "font_size": 28,
   "font_color": "#ffffff",

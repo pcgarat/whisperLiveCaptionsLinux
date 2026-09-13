@@ -6,8 +6,11 @@ from typing import Any
 from PyQt6 import QtCore, QtGui, QtWidgets
 
 from src.audio.devices import list_audio_monitors
-from src.config import LATENCY_FACTORY_PRESETS, effective_latency_profile, reset_latency_profile
-
+from src.config import (
+    LATENCY_FACTORY_PRESETS,
+    effective_latency_profile,
+    reset_latency_profile,
+)
 
 TOOLTIP_CONFIDENCE = (
     "Cuántas hipótesis consecutivas del ASR deben coincidir en un prefijo antes de "
@@ -143,6 +146,21 @@ class SettingsDialog(QtWidgets.QDialog):
         self.alpha.setValue(int(float(config.get("bg_alpha", 0.55)) * 100))
         layout.addWidget(self.alpha)
 
+        self.show_asr_line = QtWidgets.QCheckBox("Mostrar línea ASR (con traducción ON)")
+        self.show_asr_line.setChecked(bool(config.get("show_asr_line", True)))
+        self.show_asr_line.setToolTip(
+            "Con traducción activa, muestra también el texto ASR original debajo del español."
+        )
+        layout.addWidget(self.show_asr_line)
+
+        langs = config.get("installed_languages") or ["en", "es"]
+        lang_note = QtWidgets.QLabel(
+            "Idiomas instalados (overlay clicable): "
+            + ", ".join(str(x).upper() for x in langs)
+        )
+        lang_note.setWordWrap(True)
+        layout.addWidget(lang_note)
+
         buttons = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.StandardButton.Save
             | QtWidgets.QDialogButtonBox.StandardButton.Cancel
@@ -231,6 +249,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 "font_color": self.font_color_btn.text(),
                 "bg_color": self.bg_color_btn.text(),
                 "bg_alpha": self.alpha.value() / 100.0,
+                "show_asr_line": self.show_asr_line.isChecked(),
             }
         )
         return cfg

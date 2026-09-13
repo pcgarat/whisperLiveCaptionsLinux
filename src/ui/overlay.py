@@ -18,6 +18,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
         on_open_settings: Callable[[], None] | None = None,
         on_close_app: Callable[[], None] | None = None,
         on_save_config: Callable[[dict[str, Any]], None] | None = None,
+        on_restart_pipeline: Callable[[], None] | None = None,
     ) -> None:
         super().__init__()
         self.text_queue = text_queue
@@ -25,8 +26,10 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self.on_open_settings = on_open_settings
         self.on_close_app = on_close_app
         self.on_save_config = on_save_config
+        self.on_restart_pipeline = on_restart_pipeline
         self._final_text = ""
         self._partial_text = ""
+        self._translated_text = ""
         self._drag_offset: QtCore.QPoint | None = None
         self._always_on_top = bool(config.get("always_on_top", True))
         self._ignore_move_save = False
@@ -36,6 +39,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self._build_ui()
         self._apply_style()
         self._build_context_menu()
+        self._sync_translation_ui()
 
         self._timer = QtCore.QTimer(self)
         self._timer.timeout.connect(self._poll_queue)
@@ -82,7 +86,19 @@ class SubtitleOverlay(QtWidgets.QWidget):
         top = QtWidgets.QHBoxLayout()
         self.lang_label = QtWidgets.QLabel(str(self.config.get("language", "en")).upper())
         self.lang_label.setObjectName("langLabel")
+        self.lang_label.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.lang_label.setToolTip("Clic para cambiar idioma ASR")
         top.addWidget(self.lang_label)
+
+        self.translate_btn = QtWidgets.QPushButton("ES")
+        self.translate_btn.setObjectName("translateToggle")
+        self.translate_btn.setCheckable(True)
+        self.translate_btn.setChecked(bool(self.config.get("translation_enabled", False)))
+        self.translate_btn.setFixedWidth(36)
+        self.translate_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.translate_btn.setToolTip("Traducir a español (solo texto confirmado)")
+        self.translate_btn.toggled.connect(self._on_translate_toggled)
+        top.addWidget(self.translate_btn)
         top.addStretch(1)
 
         self.settings_btn = QtWidgets.QPushButton("⚙")
@@ -97,6 +113,13 @@ class SubtitleOverlay(QtWidgets.QWidget):
         top.addWidget(self.close_btn)
         panel_layout.addLayout(top)
 
+        self.translated_label = QtWidgets.QLabel("")
+        self.translated_label.setWordWrap(True)
+        self.translated_label.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        self.translated_label.setObjectName("translatedCaption")
+
         self.final_label = QtWidgets.QLabel("")
         self.final_label.setWordWrap(True)
         self.final_label.setAlignment(
@@ -109,16 +132,27 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self.partial_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
         self.partial_label.setObjectName("partialCaption")
 
+        panel_layout.addWidget(self.translated_label)
         panel_layout.addWidget(self.final_label)
         panel_layout.addWidget(self.partial_label)
         root.addWidget(self.panel)
 
-        for widget in (self, self.panel, self.lang_label, self.final_label, self.partial_label):
+        for widget in (
+            self,
+            self.panel,
+            self.lang_label,
+            self.translated_label,
+            self.final_label,
+            self.partial_label,
+        ):
             widget.installEventFilter(self)
             widget.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
 
         self.lang_label.customContextMenuRequested.connect(
             lambda pos: self._show_context_menu(self.lang_label.mapTo(self, pos))
+        )
+        self.translated_label.customContextMenuRequested.connect(
+            lambda pos: self._show_context_menu(self.translated_label.mapTo(self, pos))
         )
         self.final_label.customContextMenuRequested.connect(
             lambda pos: self._show_context_menu(self.final_label.mapTo(self, pos))
@@ -301,25 +335,45 @@ class SubtitleOverlay(QtWidgets.QWidget):
             f"rgba({partial.red()}, {partial.green()}, {partial.blue()}, {partial.alphaF():.2f})"
         )
 
+        asr_size = max(12, font_size - 4) if self._translation_active() else font_size
         self.setStyleSheet(
             f"""
             QFrame#captionPanel {{
                 background: {rgba};
                 border-radius: 12px;
             }}
-            QLabel#finalCaption {{
+            QLabel#translatedCaption {{
                 color: {font_color};
                 font-size: {font_size}px;
                 font-weight: 600;
             }}
+            QLabel#finalCaption {{
+                color: {font_color};
+                font-size: {asr_size}px;
+                font-weight: 600;
+            }}
             QLabel#partialCaption {{
                 color: {partial_rgba};
-                font-size: {max(12, font_size - 6)}px;
+                font-size: {max(12, asr_size - 6)}px;
                 font-style: italic;
             }}
             QLabel#langLabel {{
                 color: {partial_rgba};
                 font-size: 12px;
+            }}
+            QPushButton#translateToggle {{
+                background: transparent;
+                color: {partial_rgba};
+                border: 1px solid {partial_rgba};
+                border-radius: 4px;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 2px 4px;
+            }}
+            QPushButton#translateToggle:checked {{
+                color: {font_color};
+                border-color: {font_color};
+                background: rgba(255, 255, 255, 0.12);
             }}
             QPushButton {{
                 background: transparent;
@@ -340,13 +394,87 @@ class SubtitleOverlay(QtWidgets.QWidget):
         if layout is not None:
             layout.setContentsMargins(pad, pad // 2, pad, pad // 2)
         self.lang_label.setText(str(config.get("language", "en")).upper())
+        self.translate_btn.blockSignals(True)
+        self.translate_btn.setChecked(bool(config.get("translation_enabled", False)))
+        self.translate_btn.blockSignals(False)
         self.resize(int(config.get("window_width", 900)), self.height())
         self._apply_style()
+        self._sync_translation_ui()
         desired = bool(config.get("always_on_top", True))
         if desired != self._always_on_top:
             self.set_always_on_top(desired)
         else:
             self._ensure_on_top()
+
+    def _translation_active(self) -> bool:
+        if not bool(self.config.get("translation_enabled", False)):
+            return False
+        lang = str(self.config.get("language", "en")).strip().lower()
+        target = str(self.config.get("translation_target") or "es").strip().lower() or "es"
+        return lang != target
+
+    def _show_asr_with_translation(self) -> bool:
+        if not self._translation_active():
+            return True
+        return bool(self.config.get("show_asr_line", True))
+
+    def _sync_translation_ui(self) -> None:
+        translation_on = self._translation_active()
+        show_asr = self._show_asr_with_translation()
+        self.translated_label.setVisible(translation_on)
+        self.final_label.setVisible(show_asr)
+        self.partial_label.setVisible(show_asr)
+        if not translation_on:
+            self._translated_text = ""
+            self.translated_label.setText("")
+        self._refresh_caption_texts()
+        self._apply_style()
+
+    def _refresh_caption_texts(self) -> None:
+        self.translated_label.setText(self._translated_text if self._translation_active() else "")
+        self.final_label.setText(self._final_text)
+        self.partial_label.setText(self._partial_text)
+
+    def _on_translate_toggled(self, enabled: bool) -> None:
+        self.config["translation_enabled"] = bool(enabled)
+        if not enabled:
+            self._translated_text = ""
+        self._sync_translation_ui()
+        self._persist_and_maybe_restart()
+
+    def _show_language_menu(self) -> None:
+        langs = self.config.get("installed_languages") or ["en", "es"]
+        if not isinstance(langs, list) or not langs:
+            langs = ["en", "es"]
+        menu = QtWidgets.QMenu(self)
+        current = str(self.config.get("language", "en")).lower()
+        for code in langs:
+            lang = str(code).strip().lower()
+            if not lang:
+                continue
+            action = menu.addAction(lang.upper())
+            action.setCheckable(True)
+            action.setChecked(lang == current)
+            action.triggered.connect(lambda _checked=False, c=lang: self._set_language(c))
+        menu.exec(self.lang_label.mapToGlobal(self.lang_label.rect().bottomLeft()))
+
+    def _set_language(self, language: str) -> None:
+        lang = language.strip().lower() or "en"
+        if lang == str(self.config.get("language", "en")).lower():
+            return
+        self.config["language"] = lang
+        installed = list(self.config.get("installed_languages") or [])
+        if lang not in installed:
+            self.config["installed_languages"] = [lang, *installed]
+        self.lang_label.setText(lang.upper())
+        self._sync_translation_ui()
+        self._persist_and_maybe_restart()
+
+    def _persist_and_maybe_restart(self) -> None:
+        if self.on_save_config is not None:
+            self.on_save_config(self.config)
+        if self.on_restart_pipeline is not None:
+            self.on_restart_pipeline()
 
     def _poll_queue(self) -> None:
         updated = False
@@ -358,6 +486,8 @@ class SubtitleOverlay(QtWidgets.QWidget):
             if item.is_final:
                 self._final_text = item.text
                 self._partial_text = ""
+                if item.translated_text is not None:
+                    self._translated_text = item.translated_text
             else:
                 if self._final_text and item.text.startswith(self._final_text):
                     self._partial_text = item.text[len(self._final_text) :].strip()
@@ -365,8 +495,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
                     self._partial_text = item.text
             updated = True
         if updated:
-            self.final_label.setText(self._final_text)
-            self.partial_label.setText(self._partial_text)
+            self._refresh_caption_texts()
 
     def current_position(self) -> list[int]:
         return [self.x(), self.y()]
@@ -375,8 +504,11 @@ class SubtitleOverlay(QtWidgets.QWidget):
         if event.type() == QtCore.QEvent.Type.MouseButtonPress and isinstance(
             event, QtGui.QMouseEvent
         ):
-            if obj in (self.settings_btn, self.close_btn):
+            if obj in (self.settings_btn, self.close_btn, self.translate_btn):
                 return False
+            if obj is self.lang_label and event.button() == QtCore.Qt.MouseButton.LeftButton:
+                self._show_language_menu()
+                return True
             if event.button() == QtCore.Qt.MouseButton.RightButton:
                 self._show_context_menu(self.mapFromGlobal(event.globalPosition().toPoint()))
                 return True

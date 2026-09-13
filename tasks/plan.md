@@ -1,64 +1,64 @@
-# Implementation Plan: Fase 2.1 — Modo baja latencia
+# Implementation Plan: Fase 2.2 — Traducción EN→ES
 
 ## Overview
 
-Activar `latency_mode` de verdad (`stable` | `low`) con profiles por modo (`agreement_n`, `max_latency_sec`, `min_chunk_seconds`), force-commit por techo de latencia, UI de settings (selector, sliders + tooltips, Restablecer) y migración de configs fase 1. Sin traducción (2.2).
+Traducción local EN→ES sobre texto ASR confirmado, con toggle + idioma clicable en el overlay, línea ASR opcional en Settings, y persistencia completa en `config.json`. Sin cloud ni auto-detect.
 
-**Spec:** `docs/specs/fase2.1-baja-latencia-2026-09-13.md`  
-**Intent:** `docs/intent/fase2.1-baja-latencia-2026-09-13.md`
+**Estado:** implementación completa (código + unit tests 2026-09-13). Pendiente smoke manual ≥15 min.  
+**Spec:** `docs/specs/fase2.2-traduccion-en-es-2026-09-13.md`  
+**Intent:** `docs/intent/fase2.2-traduccion-en-es-2026-09-13.md`
 
 ## Architecture Decisions
 
-- **Profiles por modo:** `latency_profiles.{stable|low}` es la fuente de verdad; el pipeline lee el profile efectivo del `latency_mode` activo.
-- **Factory presets inmutables en código** (`LATENCY_FACTORY_PRESETS`) para Restablecer y defaults.
-- **Migración suave:** configs fase 1 sin `latency_profiles` se rellenan; knobs top-level legacy alimentan el modo activo.
-- **Force-commit por tiempo** en el streamer/pipeline: red de seguridad además de LocalAgreement.
-- **`min_chunk` solo vía profile** (opción A): se quita el spinbox global de chunk para no duplicar fuentes.
-- **`beam_size`:** 5 en `stable`, 1 en `low`.
-- **Aplicar cambios:** guardar config + reiniciar pipeline (patrón actual de la app).
+- **Protocol `Translator`:** `NullTranslator` + `NllbCt2Translator`; el pipeline solo conoce el protocol.
+- **Solo `is_final`:** se traduce texto confirmado; parciales no pasan por NLLB.
+- **`CaptionUpdate.translated_text`:** opcional; la UI actualiza línea ES solo cuando viene informado.
+- **Lazy load:** cargar NLLB al activar traducción o al start si `translation_enabled` ya era true.
+- **Persistencia:** `translation_enabled`, `language`, `installed_languages`, `show_asr_line`, `translation_target`, `translator_model` en config como el resto.
+- **Reinicio ASR:** cambios de idioma / traducción / modelo de translator disparan reinicio de pipeline (mismo patrón que latencia).
+- **Deps:** `ctranslate2` (ya vía faster-whisper) + tokenizer NLLB (`transformers` o sentencepiece documentado); pin y documentar tamaño/VRAM en README. Tests unitarios con Translator fake (sin GPU).
 
 ## Dependency Graph
 
 ```
-LATENCY_FACTORY_PRESETS + validate/migrate config
+config flags + CaptionUpdate.translated_text
     │
-    ├── effective profile helpers
-    │
-    ├── LocalAgreementStreamer + max_latency force-commit
+    ├── Translator protocol (Null + NLLB CT2 + factory)
     │       │
-    │       └── AsrPipeline (profile knobs + beam_size)
+    │       └── AsrPipeline traduce solo finales
     │
-    └── SettingsDialog (modo, sliders, tooltips, Restablecer)
+    └── Overlay (lang menu, toggle ES, línea 1/2)
             │
-            └── app wiring + config.example + nota README
+            └── Settings show_asr_line + app restart keys + README
 ```
 
 ## Task List (vertical slices)
 
-### Phase A: Config + streamer
-- Task 1: Profiles, migración, validación, `config.example.json`
-- Task 2: Force-commit por `max_latency_sec` + `agreement_n` dinámico (tests)
+### Phase A: Contrato + motor
+- Task 1: Config + `CaptionUpdate.translated_text` + tests
+- Task 2: `Translator` factory (Null + NLLB CT2) + tests con fake/mocks
 
 ### Checkpoint A
-- `pytest` config + streaming verde
-- Config fase 1 migra sin romper arranque
+- [x] `pytest` verde sin GPU de traducción
+- [x] Passthrough `es` / toggle OFF cubierto
 
 ### Phase B: Pipeline + UI
-- Task 3: Pipeline usa profile efectivo + `beam_size` formalizado
-- Task 4: Settings (modo, sliders, tooltips, Restablecer) + wiring app
+- Task 3: Pipeline integra translator (lazy, solo finales)
+- Task 4: Overlay + Settings + wiring persistencia/reinicio + README
 
-### Checkpoint B — Fase 2.1 completa
-- Success criteria del spec (manual `stable` vs `low`)
-- `pytest -q` verde
+### Checkpoint B — Fase 2.2 completa
+- [ ] Smoke manual EN→ES ≥15 min
+- [ ] Persistencia entre reinicios verificada
+- [x] `pytest -q` verde
 
 ## Risks and Mitigations
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| Force-commit prematuro ilegible | Med | Defaults conservadores en `stable`; tests de techo; tooltip claro |
-| Drift config legacy vs profiles | Med | Una sola fuente (`latency_profiles`); migración en `validate_config` |
-| `min_chunk=0.35` + GPU lenta → cola ASR | Med | Smoke manual en `low`; documentar subir confianza / volver a `stable` |
-| UI confusa al quitar spinbox chunk | Low | Nota en settings: el chunk lo fija el modo / Restablecer |
+| VRAM Whisper medium + NLLB | High | CT2 int8; lazy load; documentar fallback CPU; Ask si hay que pasar a Marian EN→ES |
+| 1ª activación lenta | Med | Mensaje/estado “cargando traducción…” opcional; no bloquear UI |
+| Dep `transformers` pesada | Med | Solo tokenizer si es posible; pin versión; no Marian multi |
+| Traducir demasiado tarde vs línea ASR | Low | Esperado (solo finales); `show_asr_line` para comparar |
 
 ## Open Questions
 
@@ -68,6 +68,6 @@ Ninguna bloqueante tras la aprobación del spec.
 
 - [x] Cada task tiene acceptance + verify en `tasks/todo.md`
 - [x] Orden por dependencias
-- [x] Tasks acotadas (~≤5 archivos)
-- [x] Checkpoints entre fases
-- [x] Humano aprueba este plan
+- [x] Tasks acotadas
+- [x] Checkpoints
+- [x] Humano aprueba este plan (2026-09-13 — implementación aplazada a petición del usuario)

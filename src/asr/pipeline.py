@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import logging
 import queue
 import threading
 import time
@@ -7,9 +8,35 @@ from typing import Any
 
 from src.asr.engine import WhisperEngine
 from src.asr.streaming import LocalAgreementStreamer
+from src.asr.translate import Translator, create_translator
 from src.asr.types import CaptionUpdate
 from src.audio.capture import AudioRingBuffer, ChunkPump, SystemAudioCapture
 from src.config import beam_size_for_mode, effective_latency_profile
+
+logger = logging.getLogger(__name__)
+
+
+def translate_confirmed(
+    text: str,
+    *,
+    source_lang: str,
+    target_lang: str,
+    translation_enabled: bool,
+    translator: Translator,
+) -> str | None:
+    """Traduce solo texto confirmado. Devuelve None si no aplica o falla."""
+    if not translation_enabled:
+        return None
+    src = (source_lang or "").strip().lower()
+    tgt = (target_lang or "es").strip().lower() or "es"
+    if not text.strip() or src == tgt:
+        return None
+    try:
+        out = translator.translate(text, src, tgt)
+    except Exception:
+        logger.exception("Error de traducción; se muestra solo ASR")
+        return None
+    return out if out is not None else None
 
 
 class AsrPipeline:
@@ -17,6 +44,7 @@ class AsrPipeline:
         self,
         config: dict[str, Any],
         out_queue: queue.Queue[CaptionUpdate],
+        translator: Translator | None = None,
     ) -> None:
         self.config = config
         self.out_queue = out_queue
@@ -24,6 +52,9 @@ class AsrPipeline:
         self._thread: threading.Thread | None = None
         self._capture: SystemAudioCapture | None = None
         self._engine: WhisperEngine | None = None
+        self._translator: Translator = (
+            translator if translator is not None else create_translator(config)
+        )
         profile = effective_latency_profile(config)
         self._streamer = LocalAgreementStreamer(
             agreement_n=int(profile["agreement_n"]),
@@ -51,6 +82,7 @@ class AsrPipeline:
             beam_size=beam_size_for_mode(mode),
         )
         self._engine.load()
+        self._preload_translator()
         self._capture.start()
 
         self._stop.clear()
@@ -60,6 +92,17 @@ class AsrPipeline:
         )
         self._thread = threading.Thread(target=self._loop, name="asr-pipeline", daemon=True)
         self._thread.start()
+
+    def _preload_translator(self) -> None:
+        if not bool(self.config.get("translation_enabled", False)):
+            return
+        load = getattr(self._translator, "load", None)
+        if not callable(load):
+            return
+        try:
+            load()
+        except Exception:
+            logger.exception("No se pudo precargar el traductor; se intentará en el primer final")
 
     def stop(self, timeout: float = 3.0) -> None:
         self._stop.set()
@@ -78,6 +121,8 @@ class AsrPipeline:
             min_chunk_seconds=float(profile["min_chunk_seconds"]),
         )
         language = str(self.config.get("language", "en"))
+        target_lang = str(self.config.get("translation_target") or "es")
+        translation_enabled = bool(self.config.get("translation_enabled", False))
         trim_sec = float(self.config.get("buffer_trimming_sec", 15.0))
 
         while not self._stop.is_set():
@@ -106,12 +151,20 @@ class AsrPipeline:
             result = self._streamer.push(hypothesis)
             now = time.monotonic()
             if result.newly_committed:
+                translated = translate_confirmed(
+                    result.committed,
+                    source_lang=language,
+                    target_lang=target_lang,
+                    translation_enabled=translation_enabled,
+                    translator=self._translator,
+                )
                 self.out_queue.put(
                     CaptionUpdate(
                         text=result.committed,
                         is_final=True,
                         language=language,
                         ts_mono=now,
+                        translated_text=translated,
                     )
                 )
             if result.partial:
