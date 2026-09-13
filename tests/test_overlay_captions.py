@@ -174,6 +174,79 @@ def test_late_translation_applies_if_same_final_text(
     ov.close()
 
 
+def test_reset_caption_stream_accepts_low_seq_after_pipeline_restart(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    """Tras reiniciar ASR el pipeline vuelve a seq=1; el overlay no debe descartarlo."""
+    ov, q = _overlay(qapp, cfg={"second_line_mode": "none"})
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Before restart",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Antes",
+            seq=40,
+        )
+    )
+    ov._poll_queue()
+    assert ov._caption_seq == 40
+    assert ov._translated_text == "Antes"
+
+    ov.reset_caption_stream()
+    assert ov._caption_seq == 0
+
+    q.put(
+        CaptionUpdate(
+            text="After restart",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Después",
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    assert ov._caption_seq == 1
+    assert ov._phrase_final == "After restart"
+    assert ov._translated_text.endswith("Después")
+    ov.close()
+
+
+def test_stale_low_seq_is_ignored_without_reset(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    ov, q = _overlay(qapp)
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Live",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="En vivo",
+            seq=10,
+        )
+    )
+    ov._poll_queue()
+    q.put(
+        CaptionUpdate(
+            text="Stale",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Obsoleto",
+            seq=2,
+        )
+    )
+    ov._poll_queue()
+    assert ov._caption_seq == 10
+    assert ov._phrase_final == "Live"
+    assert "Obsoleto" not in ov._translated_text
+    ov.close()
+
+
 def test_new_segment_keeps_old_translation_until_ready(
     qapp: QtWidgets.QApplication,
 ) -> None:
