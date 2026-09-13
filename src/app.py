@@ -127,6 +127,7 @@ class AppController:
         translation_keys = (
             "translation_enabled",
             "translation_target",
+            "translation_sticky_mode",
             "translator_model",
             "translation_decode_preset",
             "translation_profiles",

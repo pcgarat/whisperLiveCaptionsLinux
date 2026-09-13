@@ -28,6 +28,14 @@ TRANSLATION_PRESET_LABELS: dict[str, str] = {
 # Con traducción ON: qué mostrar como segunda línea (nunca más de 2 líneas de caption).
 SECOND_LINE_MODES = ("live_asr", "original", "none")
 
+# Sticky: reutilizar tramos ya traducidos; partials también traduce la hipótesis.
+TRANSLATION_STICKY_MODES = ("off", "committed", "partials")
+TRANSLATION_STICKY_LABELS: dict[str, str] = {
+    "off": "Normal (como ahora)",
+    "committed": "Sticky (solo confirmados)",
+    "partials": "Sticky + parciales",
+}
+
 DEFAULTS: dict[str, Any] = {
     "language": "en",
     "model": "medium",
@@ -41,6 +49,7 @@ DEFAULTS: dict[str, Any] = {
     "installed_languages": ["en", "es"],
     "translation_enabled": False,
     "translation_target": "es",
+    "translation_sticky_mode": "off",
     "second_line_mode": "live_asr",
     "translator_model": "nllb-200-distilled-ct2",
     "translation_decode_preset": "balanced",
@@ -300,6 +309,13 @@ def _normalize_installed_languages(raw: Any, language: str) -> list[str]:
     return out
 
 
+def _normalize_translation_sticky_mode(raw: Any) -> str:
+    mode = str(raw or "").strip().lower() or "off"
+    if mode not in TRANSLATION_STICKY_MODES:
+        return "off"
+    return mode
+
+
 def _normalize_second_line_mode(raw: dict[str, Any]) -> str:
     if "second_line_mode" in raw:
         mode = str(raw.get("second_line_mode") or "").strip().lower()
@@ -334,6 +350,9 @@ def validate_config(data: dict[str, Any]) -> dict[str, Any]:
     cfg["always_on_top"] = bool(cfg.get("always_on_top", True))
     cfg["audio_monitor"] = str(cfg.get("audio_monitor") or "")
     cfg["translation_enabled"] = bool(cfg.get("translation_enabled", False))
+    cfg["translation_sticky_mode"] = _normalize_translation_sticky_mode(
+        cfg.get("translation_sticky_mode")
+    )
     cfg["second_line_mode"] = _normalize_second_line_mode(raw)
     cfg.pop("show_asr_line", None)
     cfg["translation_target"] = (

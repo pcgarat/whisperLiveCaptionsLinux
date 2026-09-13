@@ -18,6 +18,8 @@ from src.config import (
     TRANSLATION_FACTORY_PRESETS,
     TRANSLATION_PRESET_LABELS,
     TRANSLATION_RESERVED_PRESET_IDS,
+    TRANSLATION_STICKY_LABELS,
+    TRANSLATION_STICKY_MODES,
     add_translation_user_preset,
     delete_translation_user_preset,
     effective_latency_profile,
@@ -41,6 +43,11 @@ TOOLTIP_TX_BEAM = (
 )
 TOOLTIP_TX_LENGTH = "Penalización de longitud NLLB. ≈1.0 es neutro; algo >1 favorece salidas un poco más largas."
 TOOLTIP_TX_NGRAM = "Evita repetir n-gramas. 0 = desactivado; 3 suele reducir bucles raros en subtítulos."
+TOOLTIP_TX_STICKY = (
+    "Normal: solo confirmados, re-traduce en rewrites. "
+    "Sticky: no re-traduce prefijos ya enviados a NLLB. "
+    "Sticky + parciales: también traduce la hipótesis en vivo (más CPU)."
+)
 
 # Cinema lower-third: carbón profundo + ámbar de marquesina (no GNOME blue genérico).
 _SETTINGS_QSS = """
@@ -668,6 +675,14 @@ class SettingsDialog(QtWidgets.QDialog):
             "solo el texto confirmado en el idioma original, o ninguna."
         )
         display.add_row("Segunda línea", self.second_line_mode)
+
+        self.tx_sticky_mode = QtWidgets.QComboBox()
+        for mode_key in TRANSLATION_STICKY_MODES:
+            self.tx_sticky_mode.addItem(TRANSLATION_STICKY_LABELS[mode_key], mode_key)
+        sticky = str(config.get("translation_sticky_mode", "off"))
+        sticky_idx = self.tx_sticky_mode.findData(sticky)
+        self.tx_sticky_mode.setCurrentIndex(sticky_idx if sticky_idx >= 0 else 0)
+        display.add_row("Modo sticky", self.tx_sticky_mode, TOOLTIP_TX_STICKY)
         body_layout.addWidget(display)
 
         quality = _Section("Calidad de decoding")
@@ -1043,6 +1058,9 @@ class SettingsDialog(QtWidgets.QDialog):
                 "bg_alpha": self.alpha.value() / 100.0,
                 "second_line_mode": str(
                     self.second_line_mode.currentData() or "live_asr"
+                ),
+                "translation_sticky_mode": str(
+                    self.tx_sticky_mode.currentData() or "off"
                 ),
                 "translation_decode_preset": preset,
                 "translation_profiles": deepcopy(self._translation_profiles()),

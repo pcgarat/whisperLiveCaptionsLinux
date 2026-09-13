@@ -557,6 +557,13 @@ class SubtitleOverlay(QtWidgets.QWidget):
                             item.translated_text, append=item.translation_append
                         )
             else:
+                if (
+                    item.translated_text is not None
+                    and item.seq >= self._caption_seq
+                ):
+                    self._apply_translated_text(
+                        item.translated_text, append=item.translation_append
+                    )
                 if self._final_text and item.text.startswith(self._final_text):
                     self._partial_text = item.text[len(self._final_text) :].strip()
                 else:

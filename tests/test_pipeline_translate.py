@@ -3,7 +3,12 @@ from __future__ import annotations
 import queue
 import threading
 
-from src.asr.pipeline import AsrPipeline, translate_confirmed
+from src.asr.pipeline import (
+    AsrPipeline,
+    TxCheckpoint,
+    plan_sticky_translation,
+    translate_confirmed,
+)
 from src.asr.translate import NullTranslator
 from src.config import TRANSLATION_FACTORY_PRESETS, validate_config
 
@@ -319,3 +324,114 @@ def test_tx_worker_does_not_starve_under_continuous_newer() -> None:
     assert tx_items, "starvation: no llegó ninguna traducción"
     assert any("four" in (i.translated_text or "") or i.seq == 4 for i in tx_items)
     pipeline.stop()
+
+
+def test_plan_sticky_reuses_prefix_on_tail_rewrite() -> None:
+    cps = [
+        TxCheckpoint("Hello", "ES:Hello"),
+        TxCheckpoint("Hello word", "ES:Hello ES:word"),
+    ]
+    plan = plan_sticky_translation(cps, "Hello world")
+    assert plan.to_translate == "world"
+    assert plan.es_prefix == "ES:Hello"
+    assert plan.emit_es is None
+
+
+def test_plan_sticky_exact_checkpoint_skips_translate() -> None:
+    cps = [TxCheckpoint("Hello", "ES:Hello")]
+    plan = plan_sticky_translation(cps, "Hello")
+    assert plan.to_translate == ""
+    assert plan.emit_es == "ES:Hello"
+
+
+def test_sticky_committed_does_not_retranslate_prefix() -> None:
+    q: queue.Queue = queue.Queue()
+    t = RecordingTranslator()
+    cfg = validate_config(
+        {
+            "translation_enabled": True,
+            "language": "en",
+            "translation_target": "es",
+            "translation_sticky_mode": "committed",
+            "device": "cpu",
+        }
+    )
+    pipeline = AsrPipeline(cfg, q, translator=t)
+    pipeline._emit_committed("Hello", language="en", now=1.0)
+    pipeline.flush_translations()
+    pipeline._emit_committed("Hello word", language="en", now=2.0)
+    pipeline.flush_translations()
+    t.calls.clear()
+
+    pipeline._emit_committed("Hello world", language="en", now=3.0)
+    pipeline.flush_translations()
+
+    assert [c[0] for c in t.calls] == ["world"]
+    tx = []
+    while True:
+        try:
+            item = q.get_nowait()
+        except queue.Empty:
+            break
+        if item.translated_text is not None:
+            tx.append(item)
+    assert tx[-1].translated_text == "ES:Hello ES:world"
+    assert tx[-1].translation_append is False
+    pipeline.stop()
+
+
+def test_sticky_partials_translates_display() -> None:
+    q: queue.Queue = queue.Queue()
+    t = RecordingTranslator()
+    cfg = validate_config(
+        {
+            "translation_enabled": True,
+            "language": "en",
+            "translation_target": "es",
+            "translation_sticky_mode": "partials",
+            "device": "cpu",
+        }
+    )
+    pipeline = AsrPipeline(cfg, q, translator=t)
+    pipeline._emit_partial("Hello there", language="en", now=1.0)
+    pipeline.flush_translations()
+
+    assert t.calls[0][0] == "Hello there"
+    tx = [i for i in _drain(q) if i.translated_text is not None]
+    assert tx[0].is_final is False
+    assert tx[0].translated_text == "ES:Hello there"
+    pipeline.stop()
+
+
+def test_apply_translation_settings_resets_sticky_checkpoints() -> None:
+    q: queue.Queue = queue.Queue()
+    t = RecordingTranslator()
+    cfg = validate_config(
+        {
+            "translation_enabled": True,
+            "language": "en",
+            "translation_target": "es",
+            "translation_sticky_mode": "committed",
+            "device": "cpu",
+        }
+    )
+    pipeline = AsrPipeline(cfg, q, translator=t)
+    pipeline._emit_committed("Hello", language="en", now=1.0)
+    pipeline.flush_translations()
+    assert pipeline._tx_checkpoints
+
+    cfg = dict(cfg)
+    cfg["translation_sticky_mode"] = "off"
+    pipeline.apply_translation_settings(cfg)
+    assert pipeline._tx_checkpoints == []
+    pipeline.stop()
+
+
+def _drain(q: queue.Queue) -> list:
+    items = []
+    while True:
+        try:
+            items.append(q.get_nowait())
+        except queue.Empty:
+            break
+    return items

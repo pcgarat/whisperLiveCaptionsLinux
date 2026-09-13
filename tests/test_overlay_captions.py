@@ -211,3 +211,36 @@ def test_new_segment_keeps_old_translation_until_ready(
     ov._poll_queue()
     assert ov._translated_text == "Nuevo"
     ov.close()
+
+
+def test_partial_can_carry_translation(qapp: QtWidgets.QApplication) -> None:
+    ov, q = _overlay(qapp)
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Hola",
+            seq=1,
+            translation_append=False,
+        )
+    )
+    ov._poll_queue()
+    q.put(
+        CaptionUpdate(
+            text="Hello world",
+            is_final=False,
+            language="en",
+            ts_mono=now,
+            translated_text="Hola mundo",
+            seq=1,
+            translation_append=False,
+        )
+    )
+    ov._poll_queue()
+    assert ov._final_text == "Hello"
+    assert ov._partial_text == "world"
+    assert ov._translated_text == "Hola mundo"
+    ov.close()
