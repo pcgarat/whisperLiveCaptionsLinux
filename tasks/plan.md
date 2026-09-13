@@ -1,85 +1,73 @@
-# Implementation Plan: Subtítulos en directo Linux — Fase 1
+# Implementation Plan: Fase 2.2 — Traducción EN→ES
 
 ## Overview
 
-App única in-process: captura PipeWire → streaming ASR con `faster-whisper` → overlay PyQt6. Sin WhisperLive server y sin código del proyecto viejo. Objetivo: subtítulos EN estables (~1–3 s), sesión ≥30 min sin cuelgues.
+Traducción local EN→ES sobre texto ASR confirmado, con toggle + idioma clicable en el overlay, línea ASR opcional en Settings, y persistencia completa en `config.json`. Sin cloud ni auto-detect.
 
-**Spec:** `docs/specs/fase1-subtitulos-directo-2026-09-13.md`  
-**Intent:** `docs/intent/subtitulos-directo-2026-09-13.md`
+**Estado:** implementación completa (código + unit tests 2026-09-13). Pendiente smoke manual ≥15 min.  
+**Spec:** `docs/specs/fase2.2-traduccion-en-es-2026-09-13.md`  
+**Intent:** `docs/intent/fase2.2-traduccion-en-es-2026-09-13.md`
 
 ## Architecture Decisions
 
-- **In-process (B):** un proceso; hilos worker para audio/ASR; UI solo cola + señales Qt.
-- **`faster-whisper` + política LocalAgreement propia:** texto provisional vs confirmado; evita reimplementar servidor Collabora.
-- **Audio en memoria:** ring buffer / chunks float32 16 kHz; cero WAV temporales por chunk.
-- **Contrato `CaptionUpdate`:** único puente ASR → UI (`text`, `is_final`, `language`, `ts_mono`).
-- **Extensibilidad sin implementar:** stub `Translator`, `latency_mode: stable`, `language` string en config.
-- **PyQt6 + modelo default `medium` + parcial discreto + confirmado.**
+- **Protocol `Translator`:** `NullTranslator` + `NllbCt2Translator`; el pipeline solo conoce el protocol.
+- **Solo `is_final`:** se traduce texto confirmado; parciales no pasan por NLLB.
+- **`CaptionUpdate.translated_text`:** opcional; la UI actualiza línea ES solo cuando viene informado.
+- **Lazy load:** cargar NLLB al activar traducción o al start si `translation_enabled` ya era true.
+- **Persistencia:** `translation_enabled`, `language`, `installed_languages`, `show_asr_line`, `translation_target`, `translator_model` en config como el resto.
+- **Reinicio ASR:** cambios de idioma / traducción / modelo de translator disparan reinicio de pipeline (mismo patrón que latencia).
+- **Deps:** `ctranslate2` (ya vía faster-whisper) + tokenizer NLLB (`transformers` o sentencepiece documentado); pin y documentar tamaño/VRAM en README. Tests unitarios con Translator fake (sin GPU).
 
 ## Dependency Graph
 
 ```
-config + CaptionUpdate types
+config flags + CaptionUpdate.translated_text
     │
-    ├── audio devices / capture
+    ├── Translator protocol (Null + NLLB CT2 + factory)
     │       │
-    │       └── asr engine + streaming policy
-    │               │
-    │               └── pipeline worker (capture → ASR → queue)
-    │                       │
-    │                       └── overlay + settings UI
-    │                               │
-    │                               └── app entry + run.sh
+    │       └── AsrPipeline traduce solo finales
+    │
+    └── Overlay (lang menu, toggle ES, línea 1/2)
+            │
+            └── Settings show_asr_line + app restart keys + README
 ```
 
 ## Task List (vertical slices)
 
-### Phase A: Foundation
-- [ ] Task 1: Skeleton del repo (estructura, requirements, config, run.sh)
-- [ ] Task 2: Tipos `CaptionUpdate` + load/save config + tests
-- [ ] Task 3: Política de streaming (unit-tested, sin GPU)
+### Phase A: Contrato + motor
+- Task 1: Config + `CaptionUpdate.translated_text` + tests
+- Task 2: `Translator` factory (Null + NLLB CT2) + tests con fake/mocks
 
-### Checkpoint: Foundation
-- [ ] `pytest -q` verde
-- [ ] Estructura y config listos
-- [ ] Review humana opcional
+### Checkpoint A
+- [x] `pytest` verde sin GPU de traducción
+- [x] Passthrough `es` / toggle OFF cubierto
 
-### Phase B: Audio + ASR core
-- [ ] Task 4: Listado de dispositivos Pulse/PipeWire (mockeable)
-- [ ] Task 5: Captura continua a buffer en memoria
-- [ ] Task 6: Motor `faster-whisper` + integración streaming
+### Phase B: Pipeline + UI
+- Task 3: Pipeline integra translator (lazy, solo finales)
+- Task 4: Overlay + Settings + wiring persistencia/reinicio + README
 
-### Checkpoint: Core ASR
-- [ ] Captura + transcripción EN en CLI/smoke (sin UI completa)
-- [ ] Review humana recomendada (GPU/deps)
-
-### Phase C: UI + producto
-- [ ] Task 7: Overlay PyQt6 (parcial/confirmado, drag, always-on-top)
-- [ ] Task 8: Diálogo settings + persistencia
-- [ ] Task 9: App wiring (pipeline ↔ UI), cierre limpio, README checklist
-
-### Checkpoint: Complete
-- [ ] Success criteria del spec cumplidos (incl. smoke ≥30 min manual)
-- [ ] Listo para review / uso diario fase 1
+### Checkpoint B — Fase 2.2 completa
+- [ ] Smoke manual EN→ES ≥15 min
+- [ ] Persistencia entre reinicios verificada
+- [x] `pytest -q` verde
 
 ## Risks and Mitigations
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| CTranslate2/CUDA mismatch con driver 595 | High | Pin versions; documentar `ctranslate2` compatible; smoke temprano en Task 6 |
-| Captura PipeWire frágil (Bluetooth monitor) | Med | Selector de dispositivo; fallback documentado; reutilizar nombres `*.monitor` |
-| Política streaming mal afinada (parpadeo/latencia) | Med | Tests unitarios + defaults conservadores; `latency_mode` reservado |
-| Bloqueo UI / cuelgues (fallo del proyecto viejo) | High | ASR nunca en hilo Qt; watchdog de cola; shutdown cooperativo |
-| VRAM con `medium` + navegador | Low | Default `medium`; permitir `small` en config |
+| VRAM Whisper medium + NLLB | High | CT2 int8; lazy load; documentar fallback CPU; Ask si hay que pasar a Marian EN→ES |
+| 1ª activación lenta | Med | Mensaje/estado “cargando traducción…” opcional; no bloquear UI |
+| Dep `transformers` pesada | Med | Solo tokenizer si es posible; pin versión; no Marian multi |
+| Traducir demasiado tarde vs línea ASR | Low | Esperado (solo finales); `show_asr_line` para comparar |
 
 ## Open Questions
 
-Ninguna bloqueante tras la aprobación del spec. Si Task 6 falla por CUDA, se pregunta antes de añadir Docker o cambiar de backend.
+Ninguna bloqueante tras la aprobación del spec.
 
 ## Verification (antes de IMPLEMENT)
 
-- [ ] Cada task tiene acceptance + verify
-- [ ] Orden por dependencias
-- [ ] Ninguna task > ~5 archivos de forma rutinaria
-- [ ] Checkpoints entre fases
-- [ ] Humano aprueba este plan
+- [x] Cada task tiene acceptance + verify en `tasks/todo.md`
+- [x] Orden por dependencias
+- [x] Tasks acotadas
+- [x] Checkpoints
+- [x] Humano aprueba este plan (2026-09-13 — implementación aplazada a petición del usuario)

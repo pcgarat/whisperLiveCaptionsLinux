@@ -1,6 +1,6 @@
-# Subtítulos en directo (Linux, local) — Fase 1
+# Subtítulos en directo (Linux, local)
 
-App de escritorio: captura el audio del sistema (PipeWire/Pulse), lo transcribe en local con `faster-whisper` y muestra un overlay flotante.
+App de escritorio: captura el audio del sistema (PipeWire/Pulse), lo transcribe en local con `faster-whisper` y muestra un overlay flotante. Opcionalmente traduce a español con NLLB (CTranslate2), 100 % local.
 
 ## Requisitos
 
@@ -23,8 +23,25 @@ La primera ejecución crea `.venv`, instala dependencias y puede descargar el mo
 
 1. Reproduce audio en inglés (navegador o reproductor).
 2. En ⚙ elige el monitor de salida (`*.monitor`) y deja idioma `en`.
-3. Arrastra el overlay; ajusta tipografía/transparencia.
-4. ✕ cierra y detiene captura + ASR.
+3. Elige modo de latencia: **stable** (~1–3 s, más estable) o **low** (~0.5–1 s, más parpadeo).
+4. Ajusta confianza / latencia máxima si hace falta; **Restablecer modo** vuelve a los presets de fábrica.
+5. Arrastra el overlay; ajusta tipografía/transparencia.
+6. ✕ cierra y detiene captura + ASR.
+
+Cambiar modo, profiles, modelo, dispositivo o idioma ASR **reinicia el pipeline**.
+El toggle de traducción hace **hot-swap** del traductor (no recarga Whisper).
+
+### Traducción EN→ES (fase 2.2)
+
+- En el overlay: clic en el código de idioma (`EN`/`ES`/…) para cambiar entre `installed_languages`.
+- Botón **ES** (toggle): activa/desactiva traducción. Persiste en `config.json`.
+- Con traducción ON: línea 1 = español (solo texto ASR **confirmado**); línea 2 = ASR en vivo si **Mostrar línea ASR** está activo en Settings.
+- Con idioma `es` o toggle OFF: no se traduce (passthrough).
+- Modelo: `JustFrederik/nllb-200-distilled-600M-ct2-int8` (alias config `nllb-200-distilled-ct2`).
+  - Primera activación descarga ~600 MB a la caché de Hugging Face.
+  - VRAM: Whisper medium + NLLB int8; si CUDA falla al cargar, reintenta en CPU.
+  - Tokenizer con `tokenizers` (sin `transformers`).
+- Licencia del modelo NLLB: CC-BY-NC-4.0 (uso no comercial).
 
 ## Tests
 
@@ -34,8 +51,9 @@ export PYTHONPATH=.
 pytest -q
 ```
 
-## Checklist manual (success criteria fase 1)
+## Checklist manual
 
+### Fase 1
 - [ ] Arranca con `./scripts/run.sh` y GPU disponible
 - [ ] Idioma `en` manual; subtítulos ~1–3 s con vídeo en inglés
 - [ ] Texto confirmado usable (sin parpadeo extremo)
@@ -43,10 +61,22 @@ pytest -q
 - [ ] Cerrar ventana termina limpio
 - [ ] Preferencias persisten en `config.json`
 
+### Fase 2.1
+- [ ] Modo `low` se siente más inmediato que `stable`
+- [ ] Overrides por modo sobreviven reinicio de la app
+- [ ] Restablecer vuelve a fábrica del modo activo
+
+### Fase 2.2
+- [ ] Toggle ES y cambio de idioma persisten tras reiniciar la app
+- [ ] EN + traducción ON: línea ES con confirmados; ASR según Settings
+- [ ] Traducción OFF: una línea ASR como antes
+- [ ] Idioma `es`: sin traducción real
+- [ ] Smoke EN→ES ≥ 15 min sin cuelgue de UI
+
 ## Arquitectura
 
-Una sola app in-process (sin servidor WhisperLive). Ver `docs/specs/fase1-subtitulos-directo-2026-09-13.md`.
+Una sola app in-process (sin servidor WhisperLive). Specs en `docs/specs/`.
 
-## Fuera de fase 1
+## Fuera de alcance actual
 
-Traducción a español, multi-idioma real, modo baja-latencia activo, auto-detect, TensorRT.
+Auto-detect de idioma, cloud, diarización, TensorRT, calidad garantizada de pares distintos de EN→ES.

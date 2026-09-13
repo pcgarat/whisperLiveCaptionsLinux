@@ -4,11 +4,26 @@
   "compute_type": "float16",
   "device": "cuda",
   "audio_monitor": "",
-  "min_chunk_seconds": 0.8,
-  "agreement_n": 2,
   "buffer_trimming_sec": 15.0,
   "use_vad": true,
   "latency_mode": "stable",
+  "latency_profiles": {
+    "stable": {
+      "agreement_n": 2,
+      "max_latency_sec": 3.0,
+      "min_chunk_seconds": 0.8
+    },
+    "low": {
+      "agreement_n": 1,
+      "max_latency_sec": 1.0,
+      "min_chunk_seconds": 0.35
+    }
+  },
+  "installed_languages": ["en", "es"],
+  "translation_enabled": false,
+  "translation_target": "es",
+  "show_asr_line": true,
+  "translator_model": "nllb-200-distilled-ct2",
   "always_on_top": true,
   "font_size": 28,
   "font_color": "#ffffff",

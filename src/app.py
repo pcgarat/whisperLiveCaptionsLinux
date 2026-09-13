@@ -15,7 +15,7 @@ from PyQt6 import QtWidgets
 from src.asr.pipeline import AsrPipeline
 from src.asr.types import CaptionUpdate
 from src.audio.devices import list_audio_monitors
-from src.config import load_config, save_config
+from src.config import load_config, save_config, validate_config
 from src.ui.overlay import SubtitleOverlay
 from src.ui.settings import SettingsDialog
 
@@ -52,6 +52,8 @@ class AppController:
             on_open_settings=self.open_settings,
             on_close_app=self.shutdown,
             on_save_config=self._save_config,
+            on_restart_pipeline=self._restart_pipeline_safe,
+            on_translation_changed=self._hot_swap_translator,
         )
         self.overlay.show()
 
@@ -82,27 +84,61 @@ class AppController:
         self.pipeline = AsrPipeline(self.config, self.queue)
         self.pipeline.start()
 
+    def _restart_pipeline_safe(self) -> None:
+        assert self.overlay is not None
+        try:
+            self._start_pipeline()
+        except Exception as exc:
+            QtWidgets.QMessageBox.critical(self.overlay, "Error al reiniciar ASR", str(exc))
+
+    def _hot_swap_translator(self) -> None:
+        if self.pipeline is None:
+            return
+        try:
+            self.pipeline.apply_translation_settings(self.config)
+        except Exception as exc:
+            assert self.overlay is not None
+            QtWidgets.QMessageBox.warning(
+                self.overlay,
+                "Traducción",
+                f"No se pudo actualizar el traductor: {exc}\nSe mantiene el ASR.",
+            )
+
     def open_settings(self) -> None:
         assert self.overlay is not None
         dlg = SettingsDialog(self.overlay, self.config)
         if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
 
-        new_cfg = dlg.result_config()
+        new_cfg = validate_config(dlg.result_config())
         new_cfg["window_pos"] = self.overlay.current_position()
-        restart_needed = any(
-            new_cfg.get(k) != self.config.get(k)
-            for k in ("language", "model", "audio_monitor", "device", "compute_type", "use_vad")
+        asr_restart_keys = (
+            "language",
+            "model",
+            "audio_monitor",
+            "device",
+            "compute_type",
+            "use_vad",
+            "latency_mode",
+            "latency_profiles",
+        )
+        translation_keys = (
+            "translation_enabled",
+            "translation_target",
+            "translator_model",
+        )
+        asr_restart = any(new_cfg.get(k) != self.config.get(k) for k in asr_restart_keys)
+        translation_only = (not asr_restart) and any(
+            new_cfg.get(k) != self.config.get(k) for k in translation_keys
         )
         self.config = new_cfg
         self._save_config(self.config)
         self.overlay.apply_config(self.config)
 
-        if restart_needed:
-            try:
-                self._start_pipeline()
-            except Exception as exc:
-                QtWidgets.QMessageBox.critical(self.overlay, "Error al reiniciar ASR", str(exc))
+        if asr_restart:
+            self._restart_pipeline_safe()
+        elif translation_only:
+            self._hot_swap_translator()
 
     def shutdown(self) -> None:
         if self._shutting_down:
