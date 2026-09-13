@@ -416,27 +416,46 @@ class SubtitleOverlay(QtWidgets.QWidget):
         target = str(self.config.get("translation_target") or "es").strip().lower() or "es"
         return lang != target
 
-    def _show_asr_with_translation(self) -> bool:
-        if not self._translation_active():
-            return True
-        return bool(self.config.get("show_asr_line", True))
+    def _second_line_mode(self) -> str:
+        mode = str(self.config.get("second_line_mode", "live_asr")).strip().lower()
+        if mode not in ("live_asr", "original", "none"):
+            return "live_asr"
+        return mode
 
     def _sync_translation_ui(self) -> None:
         translation_on = self._translation_active()
-        show_asr = self._show_asr_with_translation()
         self.translated_label.setVisible(translation_on)
-        self.final_label.setVisible(show_asr)
-        self.partial_label.setVisible(show_asr)
         if not translation_on:
             self._translated_text = ""
             self.translated_label.setText("")
+            self.final_label.setVisible(True)
+            self.partial_label.setVisible(True)
+        else:
+            mode = self._second_line_mode()
+            show_second = mode != "none"
+            self.final_label.setVisible(show_second)
+            # Con traducción nunca usamos partial como tercera línea visual.
+            self.partial_label.setVisible(False)
         self._refresh_caption_texts()
         self._apply_style()
 
     def _refresh_caption_texts(self) -> None:
-        self.translated_label.setText(self._translated_text if self._translation_active() else "")
-        self.final_label.setText(self._final_text)
-        self.partial_label.setText(self._partial_text)
+        translation_on = self._translation_active()
+        self.translated_label.setText(self._translated_text if translation_on else "")
+        if not translation_on:
+            self.final_label.setText(self._final_text)
+            self.partial_label.setText(self._partial_text)
+            return
+
+        mode = self._second_line_mode()
+        if mode == "live_asr":
+            parts = [part for part in (self._final_text, self._partial_text) if part]
+            self.final_label.setText(" ".join(parts).strip())
+        elif mode == "original":
+            self.final_label.setText(self._final_text)
+        else:
+            self.final_label.setText("")
+        self.partial_label.setText("")
 
     def _on_translate_toggled(self, enabled: bool) -> None:
         self.config["translation_enabled"] = bool(enabled)
@@ -453,14 +472,11 @@ class SubtitleOverlay(QtWidgets.QWidget):
         if not isinstance(langs, list) or not langs:
             langs = ["en", "es"]
         menu = QtWidgets.QMenu(self)
-        current = str(self.config.get("language", "en")).lower()
         for code in langs:
             lang = str(code).strip().lower()
             if not lang:
                 continue
             action = menu.addAction(language_label(lang))
-            action.setCheckable(True)
-            action.setChecked(lang == current)
             action.triggered.connect(lambda _checked=False, c=lang: self._set_language(c))
         menu.exec(self.lang_label.mapToGlobal(self.lang_label.rect().bottomLeft()))
 

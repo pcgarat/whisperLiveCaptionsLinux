@@ -10,6 +10,9 @@ LATENCY_FACTORY_PRESETS: dict[str, dict[str, float | int]] = {
     "low": {"agreement_n": 1, "max_latency_sec": 1.0, "min_chunk_seconds": 0.35},
 }
 
+# Con traducción ON: qué mostrar como segunda línea (nunca más de 2 líneas de caption).
+SECOND_LINE_MODES = ("live_asr", "original", "none")
+
 DEFAULTS: dict[str, Any] = {
     "language": "en",
     "model": "medium",
@@ -23,7 +26,7 @@ DEFAULTS: dict[str, Any] = {
     "installed_languages": ["en", "es"],
     "translation_enabled": False,
     "translation_target": "es",
-    "show_asr_line": True,
+    "second_line_mode": "live_asr",
     "translator_model": "nllb-200-distilled-ct2",
     "always_on_top": True,
     "font_size": 28,
@@ -128,6 +131,19 @@ def _normalize_installed_languages(raw: Any, language: str) -> list[str]:
     return out
 
 
+def _normalize_second_line_mode(raw: dict[str, Any]) -> str:
+    if "second_line_mode" in raw:
+        mode = str(raw.get("second_line_mode") or "").strip().lower()
+    elif "show_asr_line" in raw:
+        # Legacy bool: True → ASR en vivo; False → sin segunda línea.
+        mode = "live_asr" if bool(raw.get("show_asr_line")) else "none"
+    else:
+        mode = str(DEFAULTS["second_line_mode"])
+    if mode not in SECOND_LINE_MODES:
+        return str(DEFAULTS["second_line_mode"])
+    return mode
+
+
 def validate_config(data: dict[str, Any]) -> dict[str, Any]:
     raw = dict(data)
     cfg = deepcopy(DEFAULTS)
@@ -147,7 +163,8 @@ def validate_config(data: dict[str, Any]) -> dict[str, Any]:
     cfg["always_on_top"] = bool(cfg.get("always_on_top", True))
     cfg["audio_monitor"] = str(cfg.get("audio_monitor") or "")
     cfg["translation_enabled"] = bool(cfg.get("translation_enabled", False))
-    cfg["show_asr_line"] = bool(cfg.get("show_asr_line", True))
+    cfg["second_line_mode"] = _normalize_second_line_mode(raw)
+    cfg.pop("show_asr_line", None)
     cfg["translation_target"] = str(cfg.get("translation_target") or "es").strip().lower() or "es"
     cfg["translator_model"] = (
         str(cfg.get("translator_model") or "nllb-200-distilled-ct2").strip()

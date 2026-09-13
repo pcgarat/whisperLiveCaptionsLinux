@@ -12,7 +12,7 @@ Confirmado en entrevista 2026-09-13.
 
 ## Intent
 
-- **Outcome:** Traducción local **EN→ES** con toggle en el overlay; idioma fuente clicable entre idiomas instalados; línea ASR opcional.
+- **Outcome:** Traducción local **EN→ES** con toggle en el overlay; idioma fuente clicable entre idiomas instalados; segunda línea configurable.
 - **User:** Solo el autor, vídeos EN → leer ES.
 - **Why now:** Latencia ya controlada; el siguiente dolor es entender el contenido en español sin cloud.
 - **Success:** EN→ES usable ≥15 min; fuente `es` o traducción OFF → passthrough; tests unitarios verdes.
@@ -24,9 +24,9 @@ Confirmado en entrevista 2026-09-13.
 1. Código de idioma fuente clicable → elige entre idiomas **instalados** (MVP success: `en`; lista ampliable).
 2. Toggle de **traducción** al lado (target fijo **ES** en 2.2).
 3. **Línea 1 (ES):** solo con traducción ON; texto **confirmado** traducido (no cada parcial).
-4. **Línea 2 (ASR en vivo):** siempre el ASR como ahora; se activa/desactiva en **Settings** (`show_asr_line` o equivalente).
-5. Traducción OFF → layout de una línea ASR como hoy (la “segunda línea” aplica sobre todo cuando hay traducción / cuando el setting la pide).
-6. **Persistencia:** `translation_enabled`, `language`, `installed_languages`, `show_asr_line`, `translation_target` (y el resto de config) se **guardan y restauran** entre reinicios como cualquier otro parámetro.
+4. **Línea 2:** selector en Settings (`second_line_mode`): ASR en vivo | idioma original | nada. Con traducción ON, como máximo 2 líneas de caption (no final+parcial como filas extra).
+5. Traducción OFF → layout ASR como hoy (final + parcial).
+6. **Persistencia:** `translation_enabled`, `language`, `installed_languages`, `second_line_mode`, `translation_target` (y el resto de config) se **guardan y restauran** entre reinicios como cualquier otro parámetro.
 
 ## Siguiente paso
 

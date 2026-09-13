@@ -24,7 +24,7 @@ def test_load_missing_returns_defaults(tmp_path: Path) -> None:
     assert cfg["latency_profiles"]["low"] == LATENCY_FACTORY_PRESETS["low"]
     assert cfg["translation_enabled"] is False
     assert cfg["translation_target"] == "es"
-    assert cfg["show_asr_line"] is True
+    assert cfg["second_line_mode"] == "live_asr"
     assert cfg["installed_languages"] == ["en", "es"]
     assert cfg["translator_model"] == "nllb-200-distilled-ct2"
 
@@ -100,7 +100,7 @@ def test_save_and_load_roundtrip_preserves_translation_flags(tmp_path: Path) -> 
             "language": "en",
             "translation_enabled": True,
             "translation_target": "es",
-            "show_asr_line": False,
+            "second_line_mode": "none",
             "installed_languages": ["en", "es", "fr"],
             "translator_model": "nllb-200-distilled-ct2",
         },
@@ -109,9 +109,18 @@ def test_save_and_load_roundtrip_preserves_translation_flags(tmp_path: Path) -> 
     loaded = load_config(path)
     assert loaded["translation_enabled"] is True
     assert loaded["translation_target"] == "es"
-    assert loaded["show_asr_line"] is False
+    assert loaded["second_line_mode"] == "none"
     assert loaded["installed_languages"] == ["en", "es", "fr"]
     assert loaded["translator_model"] == "nllb-200-distilled-ct2"
+
+
+def test_migrate_legacy_show_asr_line_to_second_line_mode() -> None:
+    assert validate_config({"show_asr_line": True})["second_line_mode"] == "live_asr"
+    assert validate_config({"show_asr_line": False})["second_line_mode"] == "none"
+    migrated = validate_config({"show_asr_line": False, "second_line_mode": "original"})
+    assert migrated["second_line_mode"] == "original"
+    assert "show_asr_line" not in migrated
+    assert validate_config({"second_line_mode": "nope"})["second_line_mode"] == "live_asr"
 
 
 def test_installed_languages_includes_active_language() -> None:
