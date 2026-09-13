@@ -10,12 +10,20 @@ from pathlib import Path
 # WindowStaysOnTopHint / _NET_WM_STATE_ABOVE, como el menú de Chrome.
 os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
-from PyQt6 import QtWidgets
+from PyQt6 import QtCore, QtWidgets
 
 from src.asr.pipeline import AsrPipeline
 from src.asr.types import CaptionUpdate
 from src.audio.devices import list_audio_monitors
-from src.config import load_config, save_config, validate_config
+from src.config import (
+    apply_app_preset,
+    delete_app_preset,
+    load_config,
+    save_app_preset,
+    save_app_preset_as,
+    save_config,
+    validate_config,
+)
 from src.debug.trace import (
     SessionTracer,
     debug_trace_enabled,
@@ -23,6 +31,32 @@ from src.debug.trace import (
 )
 from src.ui.overlay import SubtitleOverlay
 from src.ui.settings import SettingsDialog
+
+_ASR_RESTART_KEYS = (
+    "language",
+    "model",
+    "audio_monitor",
+    "device",
+    "compute_type",
+    "use_vad",
+)
+_LATENCY_KEYS = (
+    "latency_mode",
+    "latency_profiles",
+)
+_TRANSLATION_KEYS = (
+    "translation_enabled",
+    "translation_target",
+    "translation_sticky_mode",
+    "translator_model",
+    "translation_decode_preset",
+    "translation_profiles",
+)
+_DISPLAY_KEYS = (
+    "captions_show_partials",
+    "captions_allow_rewrite",
+    "second_line_mode",
+)
 
 
 class AppController:
@@ -96,6 +130,7 @@ class AppController:
         if self.overlay is not None:
             self.config["window_pos"] = self.overlay.current_position()
             self.config["window_width"] = self.overlay.width()
+            self.config["window_height"] = self.overlay.height()
         if self._tracer is not None and not self._shutting_down:
             self._tracer.note_config(
                 self.config, reason=trace_reason, applied=trace_applied
@@ -132,63 +167,158 @@ class AppController:
                 f"No se pudo actualizar el traductor: {exc}\nSe mantiene el ASR.",
             )
 
-    def open_settings(self) -> None:
-        assert self.overlay is not None
-        dlg = SettingsDialog(self.overlay, self.config)
-        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
-            return
-
-        new_cfg = validate_config(dlg.result_config())
-        new_cfg["window_pos"] = self.overlay.current_position()
-        asr_restart_keys = (
-            "language",
-            "model",
-            "audio_monitor",
-            "device",
-            "compute_type",
-            "use_vad",
-            "latency_mode",
-            "latency_profiles",
-        )
-        translation_keys = (
-            "translation_enabled",
-            "translation_target",
-            "translation_sticky_mode",
-            "translator_model",
-            "translation_decode_preset",
-            "translation_profiles",
-        )
-        display_keys = (
-            "captions_show_partials",
-            "captions_allow_rewrite",
-            "second_line_mode",
-        )
+    def _classify_config_apply(self, new_cfg: dict) -> tuple[str, bool, bool, bool]:
         asr_restart = any(
-            new_cfg.get(k) != self.config.get(k) for k in asr_restart_keys
+            new_cfg.get(k) != self.config.get(k) for k in _ASR_RESTART_KEYS
+        )
+        latency_only = (not asr_restart) and any(
+            new_cfg.get(k) != self.config.get(k) for k in _LATENCY_KEYS
         )
         translation_only = (not asr_restart) and any(
-            new_cfg.get(k) != self.config.get(k) for k in translation_keys
+            new_cfg.get(k) != self.config.get(k) for k in _TRANSLATION_KEYS
         )
         if asr_restart:
             applied = "asr_restart"
+        elif latency_only and translation_only:
+            applied = "latency_and_translation_hot_swap"
+        elif latency_only:
+            applied = "latency_hot_swap"
         elif translation_only:
             applied = "translation_hot_swap"
         else:
             applied = "none"
-        self.config = new_cfg
-        self._save_config(
-            self.config, trace_reason="settings", trace_applied=applied
-        )
-        self.overlay.apply_config(self.config)
+        return applied, asr_restart, latency_only, translation_only
 
+    def _apply_config_runtime(
+        self,
+        new_cfg: dict,
+        *,
+        trace_reason: str,
+        restore_overlay_geometry: bool = False,
+    ) -> str:
+        assert self.overlay is not None
+        applied, asr_restart, latency_only, translation_only = (
+            self._classify_config_apply(new_cfg)
+        )
+        self.config = validate_config(new_cfg)
+        self.overlay.apply_config(self.config)
+        if restore_overlay_geometry:
+            self.overlay._restore_geometry()
+        self._save_config(
+            self.config, trace_reason=trace_reason, trace_applied=applied
+        )
         if asr_restart:
             self._restart_pipeline_safe()
         else:
+            if latency_only and self.pipeline is not None:
+                self.pipeline.apply_latency_settings(self.config)
             if translation_only:
                 self._hot_swap_translator()
             if self.pipeline is not None:
-                for key in display_keys:
+                for key in _DISPLAY_KEYS:
                     self.pipeline.config[key] = self.config[key]
+        return applied
+
+    def _merge_live_geometry(self, cfg: dict, settings_dlg: SettingsDialog | None) -> dict:
+        assert self.overlay is not None
+        out = dict(cfg)
+        out["window_pos"] = self.overlay.current_position()
+        out["window_width"] = self.overlay.width()
+        out["window_height"] = self.overlay.height()
+        if settings_dlg is not None:
+            out.update(settings_dlg.geometry_snapshot())
+        return validate_config(out)
+
+    def apply_app_preset_from_settings(
+        self, preset_id: str | None, settings_dlg: SettingsDialog
+    ) -> str | None:
+        """Aplica preset al instante. Devuelve aviso (p. ej. monitor ausente) o None."""
+        assert self.overlay is not None
+        previous_monitor = str(self.config.get("audio_monitor") or "")
+        try:
+            new_cfg = apply_app_preset(self.config, preset_id)
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(settings_dlg, "Preset", str(exc))
+            return None
+
+        warning: str | None = None
+        if preset_id:
+            desired = str(new_cfg.get("audio_monitor") or "")
+            if desired:
+                try:
+                    monitors = set(list_audio_monitors())
+                except Exception:
+                    monitors = set()
+                if desired not in monitors:
+                    new_cfg["audio_monitor"] = previous_monitor
+                    new_cfg = validate_config(new_cfg)
+                    warning = (
+                        f"El monitor «{desired}» no está disponible; "
+                        "se mantiene el actual."
+                    )
+
+        self._apply_config_runtime(
+            new_cfg,
+            trace_reason="app_preset_apply",
+            restore_overlay_geometry=bool(preset_id),
+        )
+        settings_dlg.reload_from_config(self.config)
+        return warning
+
+    def save_app_preset_from_settings(self, settings_dlg: SettingsDialog) -> None:
+        live = self._merge_live_geometry(settings_dlg.result_config(), settings_dlg)
+        try:
+            self.config = save_app_preset(self.config, snapshot_src=live)
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(settings_dlg, "Preset", str(exc))
+            return
+        self._save_config(self.config, trace_reason="app_preset_save")
+        settings_dlg.reload_from_config(self.config)
+
+    def save_app_preset_as_from_settings(
+        self, name: str, settings_dlg: SettingsDialog
+    ) -> None:
+        live = self._merge_live_geometry(settings_dlg.result_config(), settings_dlg)
+        try:
+            self.config = save_app_preset_as(
+                self.config, name, snapshot_src=live
+            )
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(settings_dlg, "Preset", str(exc))
+            return
+        self._save_config(self.config, trace_reason="app_preset_save_as")
+        settings_dlg.reload_from_config(self.config)
+
+    def delete_app_preset_from_settings(self, settings_dlg: SettingsDialog) -> None:
+        preset_id = self.config.get("app_preset")
+        try:
+            self.config = delete_app_preset(self.config, preset_id)
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(settings_dlg, "Preset", str(exc))
+            return
+        self._save_config(self.config, trace_reason="app_preset_delete")
+        settings_dlg.reload_from_config(self.config)
+
+    def open_settings(self) -> None:
+        assert self.overlay is not None
+        # Sin parent: si Settings es hijo del overlay, el WM (xcb) mueve ambos juntos.
+        dlg = SettingsDialog(None, self.config, controller=self)
+        if bool(self.config.get("always_on_top", True)):
+            dlg.setWindowFlag(QtCore.Qt.WindowType.WindowStaysOnTopHint, True)
+        overlay_geo = self.overlay.frameGeometry()
+        dlg.apply_saved_geometry(fallback_center=overlay_geo.center())
+        accepted = dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted
+        # Tamaño/posición de Settings se guardan aunque se cancele.
+        self.config.update(dlg.geometry_snapshot())
+        self.config = validate_config(self.config)
+        if not accepted:
+            self._save_config(self.config, trace_reason="settings_geometry")
+            return
+
+        new_cfg = validate_config(dlg.result_config())
+        # Settings trabaja sobre una copia: no pisar geometría viva del overlay.
+        new_cfg = self._merge_live_geometry(new_cfg, dlg)
+        self._apply_config_runtime(new_cfg, trace_reason="settings")
 
     def shutdown(self) -> None:
         if self._shutting_down:

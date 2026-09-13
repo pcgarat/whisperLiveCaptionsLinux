@@ -43,6 +43,8 @@ def test_load_missing_returns_defaults(tmp_path: Path) -> None:
     assert (
         cfg["translation_profiles"]["custom"] == TRANSLATION_FACTORY_PRESETS["balanced"]
     )
+    assert cfg["app_preset"] is None
+    assert cfg["app_presets"] == {}
 
 
 def test_validate_clamps_ranges() -> None:
@@ -77,6 +79,24 @@ def test_window_height_clamps() -> None:
     assert validate_config({"window_height": 500})["window_height"] == 500
     assert validate_config({"window_height": 50})["window_height"] == 120
     assert validate_config({"window_height": 9999})["window_height"] == 1600
+
+
+def test_settings_window_geometry_defaults_and_clamps() -> None:
+    cfg = validate_config({})
+    assert cfg["settings_window_pos"] is None
+    assert cfg["settings_window_width"] == 560
+    assert cfg["settings_window_height"] == 720
+    clamped = validate_config(
+        {
+            "settings_window_width": 100,
+            "settings_window_height": 9999,
+            "settings_window_pos": [10, 20],
+        }
+    )
+    assert clamped["settings_window_width"] == 520
+    assert clamped["settings_window_height"] == 1600
+    assert clamped["settings_window_pos"] == [10, 20]
+    assert validate_config({"settings_window_pos": "bad"})["settings_window_pos"] is None
 
 
 def test_text_align_normalize() -> None:

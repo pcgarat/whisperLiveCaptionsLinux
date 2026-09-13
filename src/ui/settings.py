@@ -27,6 +27,7 @@ from src.config import (
     delete_translation_user_preset,
     effective_latency_profile,
     effective_translation_decode,
+    list_app_preset_ids,
     reset_latency_profile,
     slugify_translation_preset_name,
     translation_user_preset_ids,
@@ -463,7 +464,10 @@ class _Section(QtWidgets.QWidget):
 
 class SettingsDialog(QtWidgets.QDialog):
     def __init__(
-        self, parent: QtWidgets.QWidget | None, config: dict[str, Any]
+        self,
+        parent: QtWidgets.QWidget | None,
+        config: dict[str, Any],
+        controller: Any | None = None,
     ) -> None:
         super().__init__(parent)
         self.setObjectName("SettingsDialog")
@@ -471,13 +475,17 @@ class SettingsDialog(QtWidgets.QDialog):
         self.setModal(True)
         self.setMinimumWidth(520)
         self.setMinimumHeight(640)
-        self.resize(560, 720)
         self.setStyleSheet(_SETTINGS_QSS)
+        self._controller = controller
 
         self._config = dict(config)
         if not isinstance(self._config.get("latency_profiles"), dict):
             self._config["latency_profiles"] = deepcopy(LATENCY_FACTORY_PRESETS)
         self._config = validate_config(self._config)
+
+        width = int(self._config.get("settings_window_width", 560))
+        height = int(self._config.get("settings_window_height", 720))
+        self.resize(max(520, width), max(640, height))
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 16)
@@ -494,6 +502,8 @@ class SettingsDialog(QtWidgets.QDialog):
         subtitle.setObjectName("DialogSubtitle")
         header.addWidget(subtitle)
         root.addLayout(header)
+
+        root.addWidget(self._build_app_preset_bar())
 
         tabs = QtWidgets.QTabWidget()
         tabs.addTab(self._build_general_tab(config), "General")
@@ -518,6 +528,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._loading_profile = False
         self._loading_tx = False
+        self._loading_app_preset = False
         self._guarding_mode_conflict = False
         self._prev_sticky_mode = str(
             self.tx_sticky_mode.currentData() or "off"
@@ -528,7 +539,216 @@ class SettingsDialog(QtWidgets.QDialog):
         self._refresh_translation_preset_combo()
         self._load_translation_decode_into_spins()
         self._sync_translation_preset_actions()
+        self._refresh_app_preset_bar()
         self._refresh_preview()
+
+    def _build_app_preset_bar(self) -> QtWidgets.QWidget:
+        bar = _Section("Preset general")
+        row = QtWidgets.QWidget()
+        layout = QtWidgets.QHBoxLayout(row)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(8)
+
+        self.app_preset = QtWidgets.QComboBox()
+        self.app_preset.setMinimumWidth(160)
+        self.app_preset.currentIndexChanged.connect(self._on_app_preset_changed)
+        layout.addWidget(self.app_preset, stretch=1)
+
+        self.app_preset_save_btn = QtWidgets.QPushButton("Guardar")
+        self.app_preset_save_btn.setObjectName("SecondaryButton")
+        self.app_preset_save_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.app_preset_save_btn.setToolTip(
+            "Sobrescribe el preset activo con el estado actual (todas las pestañas y ventanas)."
+        )
+        self.app_preset_save_btn.clicked.connect(self._save_app_preset)
+        layout.addWidget(self.app_preset_save_btn)
+
+        self.app_preset_save_as_btn = QtWidgets.QPushButton("Guardar como…")
+        self.app_preset_save_as_btn.setObjectName("SecondaryButton")
+        self.app_preset_save_as_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.app_preset_save_as_btn.clicked.connect(self._save_app_preset_as)
+        layout.addWidget(self.app_preset_save_as_btn)
+
+        self.app_preset_delete_btn = QtWidgets.QPushButton("Borrar")
+        self.app_preset_delete_btn.setObjectName("GhostButton")
+        self.app_preset_delete_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.app_preset_delete_btn.clicked.connect(self._delete_app_preset)
+        layout.addWidget(self.app_preset_delete_btn)
+
+        bar.body.addRow("Activo", row)
+        hint = QtWidgets.QLabel(
+            "Guarda o restaura absolutamente todo: captura, latencia, traducción, "
+            "apariencia y posición/tamaño de ventanas. Cambiar el selector aplica al instante."
+        )
+        hint.setObjectName("FieldHint")
+        hint.setWordWrap(True)
+        bar.body.addRow("", hint)
+
+        if self._controller is None:
+            self.app_preset.setEnabled(False)
+            self.app_preset_save_btn.setEnabled(False)
+            self.app_preset_save_as_btn.setEnabled(False)
+            self.app_preset_delete_btn.setEnabled(False)
+        return bar
+
+    def _refresh_app_preset_bar(self) -> None:
+        self._loading_app_preset = True
+        try:
+            current = self._config.get("app_preset")
+            self.app_preset.clear()
+            self.app_preset.addItem("(ninguno)", None)
+            for preset_id in list_app_preset_ids(self._config):
+                self.app_preset.addItem(preset_id, preset_id)
+            if isinstance(current, str) and current:
+                idx = self.app_preset.findData(current)
+                self.app_preset.setCurrentIndex(idx if idx >= 0 else 0)
+            else:
+                self.app_preset.setCurrentIndex(0)
+            has_active = bool(current) and current in (
+                self._config.get("app_presets") or {}
+            )
+            can_edit = self._controller is not None
+            self.app_preset_save_btn.setEnabled(can_edit and has_active)
+            self.app_preset_delete_btn.setEnabled(can_edit and has_active)
+            self.app_preset_save_as_btn.setEnabled(can_edit)
+            self.app_preset.setEnabled(can_edit)
+        finally:
+            self._loading_app_preset = False
+
+    def _on_app_preset_changed(self, _index: int = 0) -> None:
+        if self._loading_app_preset or self._controller is None:
+            return
+        preset_id = self.app_preset.currentData()
+        warning = self._controller.apply_app_preset_from_settings(preset_id, self)
+        if warning:
+            QtWidgets.QMessageBox.information(self, "Preset", warning)
+
+    def _save_app_preset(self) -> None:
+        if self._controller is None:
+            return
+        self._controller.save_app_preset_from_settings(self)
+
+    def _save_app_preset_as(self) -> None:
+        if self._controller is None:
+            return
+        name, ok = QtWidgets.QInputDialog.getText(
+            self,
+            "Guardar preset general",
+            "Nombre del preset:",
+        )
+        if not ok:
+            return
+        self._controller.save_app_preset_as_from_settings(str(name), self)
+
+    def _delete_app_preset(self) -> None:
+        if self._controller is None:
+            return
+        preset_id = self._config.get("app_preset")
+        if not preset_id:
+            return
+        box = QtWidgets.QMessageBox(self)
+        box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        box.setWindowTitle("Borrar preset")
+        box.setText(f"¿Borrar el preset «{preset_id}»?")
+        box.setInformativeText("No se puede deshacer. La configuración actual no cambia.")
+        box.setStandardButtons(
+            QtWidgets.QMessageBox.StandardButton.Yes
+            | QtWidgets.QMessageBox.StandardButton.No
+        )
+        box.setDefaultButton(QtWidgets.QMessageBox.StandardButton.No)
+        if box.exec() != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        self._controller.delete_app_preset_from_settings(self)
+
+    def reload_from_config(self, config: dict[str, Any]) -> None:
+        """Recarga controles tras apply/save/delete de preset general."""
+        self._config = validate_config(config)
+        self._guarding_mode_conflict = True
+        try:
+            self._refresh_language_combo(str(self._config.get("language", "en")))
+            model = str(self._config.get("model", "medium"))
+            model_idx = self.model.findText(model)
+            if model_idx >= 0:
+                self.model.setCurrentIndex(model_idx)
+            audio = str(self._config.get("audio_monitor") or "")
+            if audio:
+                pos = self.audio.findData(audio)
+                if pos >= 0:
+                    self.audio.setCurrentIndex(pos)
+                else:
+                    self.audio.insertItem(0, _friendly_audio_label(audio), audio)
+                    self.audio.setCurrentIndex(0)
+
+            mode = str(self._config.get("latency_mode", "stable"))
+            mode_idx = self.latency_mode.findData(mode)
+            self.latency_mode.setCurrentIndex(mode_idx if mode_idx >= 0 else 0)
+            self._load_profile_into_sliders(mode)
+
+            self.captions_show_partials.setChecked(
+                bool(self._config.get("captions_show_partials", True))
+            )
+            self.captions_allow_rewrite.setChecked(
+                bool(self._config.get("captions_allow_rewrite", True))
+            )
+
+            self.font_size.setValue(int(self._config.get("font_size", 28)))
+            self.padding.setValue(int(self._config.get("padding", 24)))
+            align_idx = self.text_align.findData(
+                str(self._config.get("text_align", "center"))
+            )
+            self.text_align.setCurrentIndex(align_idx if align_idx >= 0 else 0)
+            self._set_swatch(
+                self.font_color_btn, str(self._config.get("font_color", "#ffffff"))
+            )
+            self._set_swatch(
+                self.bg_color_btn, str(self._config.get("bg_color", "#000000"))
+            )
+            self.alpha.setValue(int(float(self._config.get("bg_alpha", 0.55)) * 100))
+
+            second_idx = self.second_line_mode.findData(
+                str(self._config.get("second_line_mode", "live_asr"))
+            )
+            self.second_line_mode.setCurrentIndex(second_idx if second_idx >= 0 else 0)
+            sticky = str(self._config.get("translation_sticky_mode", "off"))
+            sticky_idx = self.tx_sticky_mode.findData(sticky)
+            self.tx_sticky_mode.setCurrentIndex(sticky_idx if sticky_idx >= 0 else 0)
+            self._prev_sticky_mode = sticky
+
+            self._refresh_translation_preset_combo()
+            self._load_translation_decode_into_spins()
+            self._sync_translation_preset_actions()
+            self.apply_saved_geometry()
+            self._refresh_preview()
+        finally:
+            self._guarding_mode_conflict = False
+        self._refresh_app_preset_bar()
+
+    def apply_saved_geometry(
+        self, *, fallback_center: QtCore.QPoint | None = None
+    ) -> None:
+        """Restaura tamaño/posición guardados; si no hay pos, centra en fallback."""
+        width = max(520, int(self._config.get("settings_window_width", 560)))
+        height = max(640, int(self._config.get("settings_window_height", 720)))
+        self.resize(width, height)
+        pos = self._config.get("settings_window_pos")
+        if isinstance(pos, list) and len(pos) == 2:
+            try:
+                self.move(int(pos[0]), int(pos[1]))
+                return
+            except (TypeError, ValueError):
+                pass
+        if fallback_center is not None:
+            self.move(
+                fallback_center.x() - self.width() // 2,
+                fallback_center.y() - self.height() // 2,
+            )
+
+    def geometry_snapshot(self) -> dict[str, Any]:
+        return {
+            "settings_window_pos": [self.x(), self.y()],
+            "settings_window_width": self.width(),
+            "settings_window_height": self.height(),
+        }
 
     def accept(self) -> None:
         if not self._ensure_modes_compatible(changed="save"):
@@ -734,7 +954,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         note = QtWidgets.QLabel(
             "El chunk lo fija el modo (estable ≈ 0.8 s, baja ≈ 0.35 s). "
-            "Idioma, modelo, audio y latencia se aplican al guardar (reinicia el pipeline)."
+            "Cambios de modo/confianza/techo se aplican al guardar sin reiniciar Whisper."
         )
         note.setObjectName("FieldHint")
         note.setWordWrap(True)
@@ -1266,6 +1486,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 ),
                 "translation_decode_preset": preset,
                 "translation_profiles": deepcopy(self._translation_profiles()),
+                **self.geometry_snapshot(),
             }
         )
         return validate_config(cfg)

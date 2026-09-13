@@ -114,6 +114,7 @@ class AsrPipeline:
         self._thread: threading.Thread | None = None
         self._capture: SystemAudioCapture | None = None
         self._engine: WhisperEngine | None = None
+        self._pump: ChunkPump | None = None
         self._tx_lock = threading.Lock()
         self._translator: Translator = (
             translator if translator is not None else create_translator(config)
@@ -230,6 +231,26 @@ class AsrPipeline:
         with self._tx_lock:
             mode = str(self.config.get("translation_sticky_mode") or "off").strip().lower()
         return mode if mode in ("off", "committed", "partials") else "off"
+
+    def apply_latency_settings(self, config: dict[str, Any]) -> None:
+        """Hot-swap de modo/perfiles de latencia sin reiniciar Whisper ni captura."""
+        for key in (
+            "latency_mode",
+            "latency_profiles",
+            "agreement_n",
+            "max_latency_sec",
+            "min_chunk_seconds",
+        ):
+            if key in config:
+                self.config[key] = config[key]
+        profile = effective_latency_profile(self.config)
+        mode = str(self.config.get("latency_mode", "stable"))
+        self._streamer.agreement_n = max(1, int(profile["agreement_n"]))
+        self._streamer.max_latency_sec = max(0.5, float(profile["max_latency_sec"]))
+        if self._pump is not None:
+            self._pump.min_chunk_seconds = float(profile["min_chunk_seconds"])
+        if self._engine is not None:
+            self._engine.beam_size = beam_size_for_mode(mode)
 
     def apply_translation_settings(self, config: dict[str, Any]) -> None:
         """Hot-swap de flags/decode; recrea Translator solo si cambia motor/enable."""
@@ -609,33 +630,43 @@ class AsrPipeline:
             display, language=language, seq=self._caption_seq, is_partial=True
         )
 
-    def stop(self, timeout: float = 3.0) -> None:
+    def stop(self, timeout: float = 30.0) -> None:
+        """Para captura + ASR. Timeout alto: una inferencia Whisper puede superar 3 s."""
         self._stop.set()
         if self._capture is not None:
-            self._capture.stop(timeout=timeout)
+            self._capture.stop(timeout=min(timeout, 5.0))
         if self._thread is not None:
             self._thread.join(timeout=timeout)
+            if self._thread.is_alive():
+                logger.warning(
+                    "El hilo ASR no terminó en %.1fs; se continúa el apagado", timeout
+                )
         self._thread = None
         self._capture = None
-        self._stop_tx_worker(timeout=timeout)
+        self._pump = None
+        self._engine = None
+        self._stop_tx_worker(timeout=min(timeout, 5.0))
 
     def _loop(self) -> None:
         assert self._capture is not None and self._engine is not None
         profile = effective_latency_profile(self.config)
-        pump = ChunkPump(
+        self._pump = ChunkPump(
             self._capture.buffer,
             min_chunk_seconds=float(profile["min_chunk_seconds"]),
         )
-        language = str(self.config.get("language", "en"))
         trim_sec = float(self.config.get("buffer_trimming_sec", 15.0))
 
         sample_rate = float(self._capture.buffer.sample_rate)
         while not self._stop.is_set():
+            pump = self._pump
+            if pump is None:
+                break
             audio = pump.poll()
             if audio is None:
                 time.sleep(0.05)
                 continue
 
+            language = str(self.config.get("language", "en"))
             audio_sec = float(audio.size) / sample_rate if audio.size else 0.0
             try:
                 t0 = time.monotonic()
