@@ -43,6 +43,8 @@ def test_load_missing_returns_defaults(tmp_path: Path) -> None:
     assert (
         cfg["translation_profiles"]["custom"] == TRANSLATION_FACTORY_PRESETS["balanced"]
     )
+    assert cfg["app_preset"] is None
+    assert cfg["app_presets"] == {}
 
 
 def test_validate_clamps_ranges() -> None:

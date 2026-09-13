@@ -216,3 +216,103 @@ def test_settings_geometry_snapshot_and_restore(qapp: QtWidgets.QApplication) ->
     assert dlg2.y() == 500 - dlg2.height() // 2
     dlg.close()
     dlg2.close()
+
+
+class _FakeAppPresetController:
+    def __init__(self) -> None:
+        self.applied: list[str | None] = []
+        self.saved = 0
+        self.saved_as: list[str] = []
+        self.deleted = 0
+        self.cfg = validate_config({})
+
+    def apply_app_preset_from_settings(self, preset_id, settings_dlg):
+        self.applied.append(preset_id)
+        from src.config import apply_app_preset
+
+        self.cfg = apply_app_preset(self.cfg, preset_id)
+        settings_dlg.reload_from_config(self.cfg)
+        return None
+
+    def save_app_preset_from_settings(self, settings_dlg) -> None:
+        self.saved += 1
+        from src.config import save_app_preset
+
+        self.cfg = save_app_preset(self.cfg, snapshot_src=settings_dlg.result_config())
+        settings_dlg.reload_from_config(self.cfg)
+
+    def save_app_preset_as_from_settings(self, name: str, settings_dlg) -> None:
+        self.saved_as.append(name)
+        from src.config import save_app_preset_as
+
+        self.cfg = save_app_preset_as(
+            self.cfg, name, snapshot_src=settings_dlg.result_config()
+        )
+        settings_dlg.reload_from_config(self.cfg)
+
+    def delete_app_preset_from_settings(self, settings_dlg) -> None:
+        self.deleted += 1
+        from src.config import delete_app_preset
+
+        self.cfg = delete_app_preset(self.cfg)
+        settings_dlg.reload_from_config(self.cfg)
+
+
+def test_app_preset_bar_disabled_without_controller(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    dlg = SettingsDialog(None, validate_config({}))
+    assert dlg.app_preset_save_btn.isEnabled() is False
+    assert dlg.app_preset_save_as_btn.isEnabled() is False
+    assert dlg.app_preset_delete_btn.isEnabled() is False
+    dlg.close()
+
+
+def test_app_preset_bar_save_as_and_guardar(
+    qapp: QtWidgets.QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ctrl = _FakeAppPresetController()
+    dlg = SettingsDialog(None, ctrl.cfg, controller=ctrl)
+    assert dlg.app_preset_save_btn.isEnabled() is False
+    assert dlg.app_preset_save_as_btn.isEnabled() is True
+
+    monkeypatch.setattr(
+        QtWidgets.QInputDialog,
+        "getText",
+        lambda *args, **kwargs: ("Directo ES", True),
+    )
+    dlg._save_app_preset_as()
+    assert ctrl.saved_as == ["Directo ES"]
+    assert dlg.app_preset.currentData() == "directo-es"
+    assert dlg.app_preset_save_btn.isEnabled() is True
+    assert dlg.app_preset_delete_btn.isEnabled() is True
+
+    dlg.font_size.setValue(42)
+    dlg._save_app_preset()
+    assert ctrl.saved == 1
+    assert ctrl.cfg["app_presets"]["directo-es"]["font_size"] == 42
+    dlg.close()
+
+
+def test_app_preset_reload_updates_controls(qapp: QtWidgets.QApplication) -> None:
+    dlg = SettingsDialog(None, validate_config({"font_size": 28}))
+    dlg.reload_from_config(
+        validate_config(
+            {
+                "font_size": 55,
+                "language": "es",
+                "latency_mode": "low",
+                "text_align": "left",
+                "settings_window_width": 600,
+                "settings_window_height": 700,
+                "settings_window_pos": [11, 22],
+            }
+        )
+    )
+    assert dlg.font_size.value() == 55
+    assert dlg.language.currentData() == "es"
+    assert dlg.latency_mode.currentData() == "low"
+    assert dlg.text_align.currentData() == "left"
+    assert dlg.width() == 600
+    assert dlg.height() == 700
+    dlg.close()

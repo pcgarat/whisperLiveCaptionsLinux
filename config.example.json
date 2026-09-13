@@ -62,5 +62,7 @@
   "window_height": null,
   "settings_window_pos": null,
   "settings_window_width": 560,
-  "settings_window_height": 720
+  "settings_window_height": 720,
+  "app_preset": null,
+  "app_presets": {}
 }

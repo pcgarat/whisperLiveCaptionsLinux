@@ -79,7 +79,12 @@ DEFAULTS: dict[str, Any] = {
     "settings_window_pos": None,
     "settings_window_width": 560,
     "settings_window_height": 720,
+    "app_preset": None,
+    "app_presets": {},
 }
+
+# Meta de presets generales: no se anidan dentro de cada snapshot.
+APP_PRESET_META_KEYS = frozenset({"app_preset", "app_presets"})
 
 CONFIG_NAME = "config.json"
 
@@ -355,7 +360,134 @@ def _normalize_window_pos(raw: Any) -> list[int] | None:
     return [int(raw[0]), int(raw[1])]
 
 
-def validate_config(data: dict[str, Any]) -> dict[str, Any]:
+def slugify_app_preset_name(name: str) -> str:
+    return slugify_translation_preset_name(name)
+
+
+def snapshot_app_config(cfg: dict[str, Any]) -> dict[str, Any]:
+    """Copia validada del estado de app sin meta de presets generales."""
+    raw = {
+        key: value
+        for key, value in dict(cfg).items()
+        if key not in APP_PRESET_META_KEYS
+    }
+    validated = validate_config(raw, _skip_app_presets=True)
+    return {
+        key: deepcopy(value)
+        for key, value in validated.items()
+        if key not in APP_PRESET_META_KEYS
+    }
+
+
+def _normalize_app_presets(raw: Any) -> dict[str, dict[str, Any]]:
+    if not isinstance(raw, dict):
+        return {}
+    out: dict[str, dict[str, Any]] = {}
+    for key, blob in raw.items():
+        slug = str(key).strip().lower()
+        if not slug or not isinstance(blob, dict):
+            continue
+        out[slug] = snapshot_app_config(blob)
+    return out
+
+
+def _normalize_app_preset_id(raw: Any, presets: dict[str, dict[str, Any]]) -> str | None:
+    if raw is None:
+        return None
+    slug = str(raw).strip().lower()
+    if not slug or slug not in presets:
+        return None
+    return slug
+
+
+def list_app_preset_ids(cfg: dict[str, Any]) -> list[str]:
+    presets = cfg.get("app_presets")
+    if not isinstance(presets, dict):
+        return []
+    return sorted(str(key) for key in presets.keys())
+
+
+def apply_app_preset(cfg: dict[str, Any], preset_id: str | None) -> dict[str, Any]:
+    """Fusiona un snapshot sobre cfg conservando app_presets. None → solo limpia app_preset."""
+    out = validate_config(deepcopy(cfg))
+    presets = deepcopy(out.get("app_presets") or {})
+    if not isinstance(presets, dict):
+        presets = {}
+    if preset_id is None or str(preset_id).strip() == "":
+        out["app_preset"] = None
+        out["app_presets"] = presets
+        return validate_config(out)
+    key = str(preset_id).strip().lower()
+    if key not in presets:
+        raise ValueError(f"Preset desconocido: {key}")
+    merged = {
+        **deepcopy(presets[key]),
+        "app_presets": presets,
+        "app_preset": key,
+    }
+    return validate_config(merged)
+
+
+def save_app_preset(
+    cfg: dict[str, Any], snapshot_src: dict[str, Any] | None = None
+) -> dict[str, Any]:
+    """Sobrescribe el preset activo con el snapshot indicado (o el propio cfg)."""
+    out = validate_config(deepcopy(cfg))
+    preset_id = out.get("app_preset")
+    presets = out.get("app_presets")
+    if not isinstance(preset_id, str) or not preset_id:
+        raise ValueError("No hay preset activo para sobrescribir")
+    if not isinstance(presets, dict) or preset_id not in presets:
+        raise ValueError(f"Preset activo desconocido: {preset_id}")
+    src = snapshot_src if snapshot_src is not None else out
+    presets = deepcopy(presets)
+    presets[preset_id] = snapshot_app_config(src)
+    out["app_presets"] = presets
+    return validate_config(out)
+
+
+def save_app_preset_as(
+    cfg: dict[str, Any],
+    name: str,
+    snapshot_src: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Crea un preset nuevo (falla si el slug ya existe) y lo deja activo."""
+    slug = slugify_app_preset_name(name)
+    if not slug:
+        raise ValueError("Nombre de preset vacío o inválido")
+    out = validate_config(deepcopy(cfg))
+    presets = deepcopy(out.get("app_presets") or {})
+    if not isinstance(presets, dict):
+        presets = {}
+    if slug in presets:
+        raise ValueError(f"Ya existe un preset «{slug}»")
+    src = snapshot_src if snapshot_src is not None else out
+    presets[slug] = snapshot_app_config(src)
+    out["app_presets"] = presets
+    out["app_preset"] = slug
+    return validate_config(out)
+
+
+def delete_app_preset(
+    cfg: dict[str, Any], preset_id: str | None = None
+) -> dict[str, Any]:
+    """Borra un preset de usuario y deja app_preset en null."""
+    out = validate_config(deepcopy(cfg))
+    key = str(preset_id or out.get("app_preset") or "").strip().lower()
+    presets = deepcopy(out.get("app_presets") or {})
+    if not key:
+        raise ValueError("No hay preset para borrar")
+    if not isinstance(presets, dict) or key not in presets:
+        raise ValueError(f"Preset desconocido: {key}")
+    del presets[key]
+    out["app_presets"] = presets
+    out["app_preset"] = None
+    return validate_config(out)
+
+
+def validate_config(
+    data: dict[str, Any], *, _skip_app_presets: bool = False
+) -> dict[str, Any]:
     raw = dict(data)
     cfg = deepcopy(DEFAULTS)
     cfg.update(raw)
@@ -425,6 +557,16 @@ def validate_config(data: dict[str, Any]) -> dict[str, Any]:
 
     cfg["window_pos"] = _normalize_window_pos(cfg.get("window_pos"))
     cfg["settings_window_pos"] = _normalize_window_pos(cfg.get("settings_window_pos"))
+
+    if _skip_app_presets:
+        cfg["app_preset"] = None
+        cfg["app_presets"] = {}
+        return cfg
+
+    cfg["app_presets"] = _normalize_app_presets(raw.get("app_presets"))
+    cfg["app_preset"] = _normalize_app_preset_id(
+        raw.get("app_preset"), cfg["app_presets"]
+    )
 
     return cfg
 
