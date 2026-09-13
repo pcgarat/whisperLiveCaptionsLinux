@@ -38,6 +38,14 @@ TEXT_ALIGN_LABELS: dict[str, str] = {
     "left": "Izquierda",
 }
 
+# Cuantización faster-whisper (CTranslate2). Solo Whisper; NLLB usa int8 aparte.
+COMPUTE_TYPES = ("float16", "int8_float16", "int8")
+COMPUTE_TYPE_LABELS: dict[str, str] = {
+    "float16": "float16 — calidad (recomendado)",
+    "int8_float16": "int8_float16 — menos VRAM",
+    "int8": "int8 — máximo ahorro",
+}
+
 # Sticky: reutilizar tramos ya traducidos; partials también traduce la hipótesis.
 TRANSLATION_STICKY_MODES = ("off", "committed", "partials")
 TRANSLATION_STICKY_LABELS: dict[str, str] = {
@@ -115,6 +123,7 @@ def _builtin_defaults() -> dict[str, Any]:
         "opt_tx_coalesce_emit": True,
         "opt_perf_metrics": True,
         "opt_short_caption_beam_cap": True,
+        "debug_hud": False,
     }
     return {
         **deepcopy(snap),
@@ -646,11 +655,14 @@ def validate_config(
     )
     cfg["language"] = str(cfg["language"]).strip().lower() or "en"
     cfg["model"] = str(cfg["model"]).strip() or "medium"
+    compute = str(cfg.get("compute_type") or "float16").strip().lower()
+    cfg["compute_type"] = compute if compute in COMPUTE_TYPES else "float16"
     cfg["latency_mode"] = str(cfg.get("latency_mode", "stable"))
     if cfg["latency_mode"] not in LATENCY_FACTORY_PRESETS:
         cfg["latency_mode"] = "stable"
     cfg["use_vad"] = bool(cfg["use_vad"])
     cfg["always_on_top"] = bool(cfg.get("always_on_top", True))
+    cfg["debug_hud"] = bool(cfg.get("debug_hud", False))
     cfg["audio_monitor"] = str(cfg.get("audio_monitor") or "")
     cfg["translation_enabled"] = bool(cfg.get("translation_enabled", False))
     cfg["translation_sticky_mode"] = _normalize_translation_sticky_mode(

@@ -100,6 +100,19 @@ def test_settings_captions_display_toggles(qapp: QtWidgets.QApplication) -> None
     dlg.close()
 
 
+def test_settings_compute_type(qapp: QtWidgets.QApplication) -> None:
+    dlg = SettingsDialog(
+        None, validate_config({"compute_type": "int8_float16"})
+    )
+    assert dlg.compute_type.currentData() == "int8_float16"
+    idx = dlg.compute_type.findData("int8")
+    assert idx >= 0
+    dlg.compute_type.setCurrentIndex(idx)
+    cfg = dlg.result_config()
+    assert cfg["compute_type"] == "int8"
+    dlg.close()
+
+
 def test_settings_appearance_tab_text_align(qapp: QtWidgets.QApplication) -> None:
     from PyQt6 import QtCore
 

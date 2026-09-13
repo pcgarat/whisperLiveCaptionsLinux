@@ -14,6 +14,8 @@ from src.asr.languages import (
 from src.audio.devices import list_audio_monitors
 from src.config import (
     APP_PRESET_DEFAULT,
+    COMPUTE_TYPE_LABELS,
+    COMPUTE_TYPES,
     LATENCY_FACTORY_PRESETS,
     SECOND_LINE_MODES,
     TEXT_ALIGN_LABELS,
@@ -34,6 +36,11 @@ from src.config import (
 )
 from src.ui.branding import load_brand_logo_pixmap, repo_or_app_root
 
+HINT_COMPUTE_TYPE = (
+    "Precisión de Whisper en GPU. float16 suele ser lo mejor; "
+    "int8_float16 libera VRAM con poca pérdida; int8 ahorra más "
+    "(útil si Whisper + NLLB aprietan). Solo afecta al reconocimiento, no a la traducción."
+)
 HINT_LATENCY_MODE = (
     "Estable prioriza texto limpio. Baja latencia responde antes y admite más parpadeo. "
     "El icono a la derecha restablece confianza y techo del modo elegido."
@@ -1154,6 +1161,10 @@ class SettingsDialog(QtWidgets.QDialog):
             model_idx = self.model.findText(model)
             if model_idx >= 0:
                 self.model.setCurrentIndex(model_idx)
+            compute_idx = self.compute_type.findData(
+                str(self._config.get("compute_type", "float16"))
+            )
+            self.compute_type.setCurrentIndex(compute_idx if compute_idx >= 0 else 0)
             audio = str(self._config.get("audio_monitor") or "")
             if audio:
                 pos = self.audio.findData(audio)
@@ -1353,6 +1364,15 @@ class SettingsDialog(QtWidgets.QDialog):
         self.model.setCurrentIndex(idx if idx >= 0 else 1)
         _size_combo(self.model, "sm")
         capture.add_row("Modelo Whisper", self.model)
+
+        self.compute_type = QtWidgets.QComboBox()
+        for value in COMPUTE_TYPES:
+            self.compute_type.addItem(COMPUTE_TYPE_LABELS[value], value)
+        compute = str(config.get("compute_type", "float16"))
+        compute_idx = self.compute_type.findData(compute)
+        self.compute_type.setCurrentIndex(compute_idx if compute_idx >= 0 else 0)
+        _size_combo(self.compute_type, "md")
+        capture.add_row("Precisión GPU", self.compute_type, HINT_COMPUTE_TYPE)
 
         self.audio = QtWidgets.QComboBox()
         audio_error: str | None = None
@@ -2059,6 +2079,9 @@ class SettingsDialog(QtWidgets.QDialog):
                 "language": lang,
                 "installed_languages": installed,
                 "model": self.model.currentText(),
+                "compute_type": str(
+                    self.compute_type.currentData() or "float16"
+                ),
                 "audio_monitor": str(audio or ""),
                 "latency_mode": self._current_mode(),
                 "latency_profiles": deepcopy(self._profiles()),
