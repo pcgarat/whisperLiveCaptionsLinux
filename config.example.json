@@ -1,0 +1,19 @@
+{
+  "language": "en",
+  "model": "medium",
+  "compute_type": "float16",
+  "device": "cuda",
+  "audio_monitor": "",
+  "min_chunk_seconds": 0.8,
+  "agreement_n": 2,
+  "buffer_trimming_sec": 15.0,
+  "use_vad": true,
+  "latency_mode": "stable",
+  "font_size": 28,
+  "font_color": "#ffffff",
+  "bg_color": "#000000",
+  "bg_alpha": 0.55,
+  "padding": 24,
+  "window_pos": null,
+  "window_width": 900
+}
