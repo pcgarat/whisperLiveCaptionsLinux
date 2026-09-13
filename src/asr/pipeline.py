@@ -11,7 +11,11 @@ from src.asr.streaming import LocalAgreementStreamer
 from src.asr.translate import Translator, create_translator
 from src.asr.types import CaptionUpdate
 from src.audio.capture import AudioRingBuffer, ChunkPump, SystemAudioCapture
-from src.config import beam_size_for_mode, effective_latency_profile
+from src.config import (
+    beam_size_for_mode,
+    effective_latency_profile,
+    effective_translation_decode,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -23,6 +27,7 @@ def translate_confirmed(
     target_lang: str,
     translation_enabled: bool,
     translator: Translator,
+    decode: dict[str, float | int] | None = None,
 ) -> str | None:
     """Traduce solo texto confirmado. Devuelve None si no aplica o falla."""
     if not translation_enabled:
@@ -32,7 +37,7 @@ def translate_confirmed(
     if not text.strip() or src == tgt:
         return None
     try:
-        out = translator.translate(text, src, tgt)
+        out = translator.translate(text, src, tgt, decode=decode)
     except Exception:
         logger.exception("Error de traducción; se muestra solo ASR")
         return None
@@ -56,6 +61,11 @@ class AsrPipeline:
         self._translator: Translator = (
             translator if translator is not None else create_translator(config)
         )
+        self._tx_fingerprint = (
+            bool(config.get("translation_enabled", False)),
+            str(config.get("translator_model") or "nllb-200-distilled-ct2"),
+            str(config.get("device") or "cuda"),
+        )
         profile = effective_latency_profile(config)
         self._streamer = LocalAgreementStreamer(
             agreement_n=int(profile["agreement_n"]),
@@ -68,11 +78,15 @@ class AsrPipeline:
 
         source = str(self.config.get("audio_monitor") or "")
         if not source:
-            raise RuntimeError("Selecciona un dispositivo de audio (monitor) en configuración.")
+            raise RuntimeError(
+                "Selecciona un dispositivo de audio (monitor) en configuración."
+            )
 
         profile = effective_latency_profile(self.config)
         mode = str(self.config.get("latency_mode", "stable"))
-        buffer = AudioRingBuffer(max_seconds=float(self.config.get("buffer_trimming_sec", 15.0)) + 5.0)
+        buffer = AudioRingBuffer(
+            max_seconds=float(self.config.get("buffer_trimming_sec", 15.0)) + 5.0
+        )
         self._capture = SystemAudioCapture(source_name=source, buffer=buffer)
         self._engine = WhisperEngine(
             model_size=str(self.config.get("model", "medium")),
@@ -91,7 +105,9 @@ class AsrPipeline:
             agreement_n=int(profile["agreement_n"]),
             max_latency_sec=float(profile["max_latency_sec"]),
         )
-        self._thread = threading.Thread(target=self._loop, name="asr-pipeline", daemon=True)
+        self._thread = threading.Thread(
+            target=self._loop, name="asr-pipeline", daemon=True
+        )
         self._thread.start()
 
     def _preload_translator(self) -> None:
@@ -109,10 +125,17 @@ class AsrPipeline:
         try:
             load()
         except Exception:
-            logger.exception("No se pudo precargar el traductor; se intentará en el primer final")
+            logger.exception(
+                "No se pudo precargar el traductor; se intentará en el primer final"
+            )
 
     def apply_translation_settings(self, config: dict[str, Any]) -> None:
-        """Hot-swap del Translator sin reiniciar captura/Whisper."""
+        """Hot-swap de flags/decode; recrea Translator solo si cambia motor/enable."""
+        fingerprint = (
+            bool(config.get("translation_enabled", False)),
+            str(config.get("translator_model") or "nllb-200-distilled-ct2"),
+            str(config.get("device") or "cuda"),
+        )
         with self._tx_lock:
             for key in (
                 "translation_enabled",
@@ -120,13 +143,18 @@ class AsrPipeline:
                 "translator_model",
                 "device",
                 "language",
+                "translation_decode_preset",
+                "translation_profiles",
             ):
                 if key in config:
                     self.config[key] = config[key]
-            self._translator = create_translator(self.config)
+            need_recreate = fingerprint != self._tx_fingerprint
+            if need_recreate:
+                self._translator = create_translator(self.config)
+                self._tx_fingerprint = fingerprint
             translator = self._translator
             enabled = bool(self.config.get("translation_enabled", False))
-        if enabled:
+        if need_recreate and enabled:
             threading.Thread(
                 target=self._preload_translator_instance,
                 args=(translator,),
@@ -134,11 +162,14 @@ class AsrPipeline:
                 daemon=True,
             ).start()
 
-    def translation_snapshot(self) -> tuple[bool, str, Translator]:
+    def translation_snapshot(
+        self,
+    ) -> tuple[bool, str, Translator, dict[str, float | int]]:
         with self._tx_lock:
             enabled = bool(self.config.get("translation_enabled", False))
             target = str(self.config.get("translation_target") or "es")
-            return enabled, target, self._translator
+            decode = effective_translation_decode(self.config)
+            return enabled, target, self._translator, decode
 
     def stop(self, timeout: float = 3.0) -> None:
         self._stop.set()
@@ -185,13 +216,16 @@ class AsrPipeline:
             result = self._streamer.push(hypothesis)
             now = time.monotonic()
             if result.newly_committed:
-                translation_enabled, target_lang, translator = self.translation_snapshot()
+                translation_enabled, target_lang, translator, decode = (
+                    self.translation_snapshot()
+                )
                 translated = translate_confirmed(
                     result.committed,
                     source_lang=language,
                     target_lang=target_lang,
                     translation_enabled=translation_enabled,
                     translator=translator,
+                    decode=decode,
                 )
                 self.out_queue.put(
                     CaptionUpdate(
@@ -216,7 +250,9 @@ class AsrPipeline:
             if self._capture.buffer.duration_seconds() > trim_sec and result.committed:
                 # Conserva cola del buffer para no crecer sin límite en sesiones largas.
                 keep = self._capture.buffer.read_all()
-                keep_samples = int(self._capture.buffer.sample_rate * min(8.0, trim_sec / 2))
+                keep_samples = int(
+                    self._capture.buffer.sample_rate * min(8.0, trim_sec / 2)
+                )
                 if keep.size > keep_samples:
                     self._capture.buffer.clear()
                     self._capture.buffer.write(keep[-keep_samples:])

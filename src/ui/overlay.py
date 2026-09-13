@@ -87,7 +87,9 @@ class SubtitleOverlay(QtWidgets.QWidget):
         panel_layout.setContentsMargins(pad, pad // 2, pad, pad // 2)
 
         top = QtWidgets.QHBoxLayout()
-        self.lang_label = QtWidgets.QLabel(str(self.config.get("language", "en")).upper())
+        self.lang_label = QtWidgets.QLabel(
+            str(self.config.get("language", "en")).upper()
+        )
         self.lang_label.setObjectName("langLabel")
         self.lang_label.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.lang_label.setToolTip("Clic para cambiar idioma ASR")
@@ -96,7 +98,9 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self.translate_btn = QtWidgets.QPushButton("ES")
         self.translate_btn.setObjectName("translateToggle")
         self.translate_btn.setCheckable(True)
-        self.translate_btn.setChecked(bool(self.config.get("translation_enabled", False)))
+        self.translate_btn.setChecked(
+            bool(self.config.get("translation_enabled", False))
+        )
         self.translate_btn.setFixedWidth(36)
         self.translate_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.translate_btn.setToolTip("Traducir a español (solo texto confirmado)")
@@ -187,7 +191,9 @@ class SubtitleOverlay(QtWidgets.QWidget):
                 return x, y
         # Si quedó fuera (cambio de monitor), ancla abajo-centro del primario.
         geo = QtGui.QGuiApplication.primaryScreen().availableGeometry()
-        return geo.center().x() - self.width() // 2, geo.bottom() - max(180, self.height() + 40)
+        return geo.center().x() - self.width() // 2, geo.bottom() - max(
+            180, self.height() + 40
+        )
 
     def _restore_position(self) -> None:
         saved = self._saved_position()
@@ -334,9 +340,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
         rgba = f"rgba({color.red()}, {color.green()}, {color.blue()}, {color.alphaF():.2f})"
         partial = QtGui.QColor(font_color)
         partial.setAlphaF(0.55)
-        partial_rgba = (
-            f"rgba({partial.red()}, {partial.green()}, {partial.blue()}, {partial.alphaF():.2f})"
-        )
+        partial_rgba = f"rgba({partial.red()}, {partial.green()}, {partial.blue()}, {partial.alphaF():.2f})"
 
         asr_size = max(12, font_size - 4) if self._translation_active() else font_size
         self.setStyleSheet(
@@ -413,7 +417,9 @@ class SubtitleOverlay(QtWidgets.QWidget):
         if not bool(self.config.get("translation_enabled", False)):
             return False
         lang = str(self.config.get("language", "en")).strip().lower()
-        target = str(self.config.get("translation_target") or "es").strip().lower() or "es"
+        target = (
+            str(self.config.get("translation_target") or "es").strip().lower() or "es"
+        )
         return lang != target
 
     def _second_line_mode(self) -> str:
@@ -477,7 +483,9 @@ class SubtitleOverlay(QtWidgets.QWidget):
             if not lang:
                 continue
             action = menu.addAction(language_label(lang))
-            action.triggered.connect(lambda _checked=False, c=lang: self._set_language(c))
+            action.triggered.connect(
+                lambda _checked=False, c=lang: self._set_language(c)
+            )
         menu.exec(self.lang_label.mapToGlobal(self.lang_label.rect().bottomLeft()))
 
     def _set_language(self, language: str) -> None:
@@ -526,17 +534,27 @@ class SubtitleOverlay(QtWidgets.QWidget):
         ):
             if obj in (self.settings_btn, self.close_btn, self.translate_btn):
                 return False
-            if obj is self.lang_label and event.button() == QtCore.Qt.MouseButton.LeftButton:
+            if (
+                obj is self.lang_label
+                and event.button() == QtCore.Qt.MouseButton.LeftButton
+            ):
                 self._show_language_menu()
                 return True
             if event.button() == QtCore.Qt.MouseButton.RightButton:
-                self._show_context_menu(self.mapFromGlobal(event.globalPosition().toPoint()))
+                self._show_context_menu(
+                    self.mapFromGlobal(event.globalPosition().toPoint())
+                )
                 return True
             if event.button() == QtCore.Qt.MouseButton.LeftButton:
                 if self._begin_drag(event):
                     return True
-        if event.type() == QtCore.QEvent.Type.MouseMove and isinstance(event, QtGui.QMouseEvent):
-            if self._drag_offset is not None and event.buttons() & QtCore.Qt.MouseButton.LeftButton:
+        if event.type() == QtCore.QEvent.Type.MouseMove and isinstance(
+            event, QtGui.QMouseEvent
+        ):
+            if (
+                self._drag_offset is not None
+                and event.buttons() & QtCore.Qt.MouseButton.LeftButton
+            ):
                 self.move(event.globalPosition().toPoint() - self._drag_offset)
                 return True
         if event.type() == QtCore.QEvent.Type.MouseButtonRelease:
@@ -547,7 +565,9 @@ class SubtitleOverlay(QtWidgets.QWidget):
         handle = self.windowHandle()
         if handle is not None and handle.startSystemMove():
             return True
-        self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+        self._drag_offset = (
+            event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+        )
         return True
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
@@ -555,13 +575,18 @@ class SubtitleOverlay(QtWidgets.QWidget):
             self._show_context_menu(event.pos())
             event.accept()
             return
-        if event.button() == QtCore.Qt.MouseButton.LeftButton and self._begin_drag(event):
+        if event.button() == QtCore.Qt.MouseButton.LeftButton and self._begin_drag(
+            event
+        ):
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
-        if self._drag_offset is not None and event.buttons() & QtCore.Qt.MouseButton.LeftButton:
+        if (
+            self._drag_offset is not None
+            and event.buttons() & QtCore.Qt.MouseButton.LeftButton
+        ):
             self.move(event.globalPosition().toPoint() - self._drag_offset)
             event.accept()
             return

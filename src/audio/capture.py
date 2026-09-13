@@ -78,7 +78,9 @@ class SystemAudioCapture:
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
         )
-        self._thread = threading.Thread(target=self._read_loop, name="audio-capture", daemon=True)
+        self._thread = threading.Thread(
+            target=self._read_loop, name="audio-capture", daemon=True
+        )
         self._thread.start()
 
     def stop(self, timeout: float = 2.0) -> None:

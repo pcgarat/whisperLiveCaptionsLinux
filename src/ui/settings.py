@@ -15,8 +15,17 @@ from src.audio.devices import list_audio_monitors
 from src.config import (
     LATENCY_FACTORY_PRESETS,
     SECOND_LINE_MODES,
+    TRANSLATION_FACTORY_PRESETS,
+    TRANSLATION_PRESET_LABELS,
+    TRANSLATION_RESERVED_PRESET_IDS,
+    add_translation_user_preset,
+    delete_translation_user_preset,
     effective_latency_profile,
+    effective_translation_decode,
     reset_latency_profile,
+    slugify_translation_preset_name,
+    translation_user_preset_ids,
+    validate_config,
 )
 
 TOOLTIP_CONFIDENCE = (
@@ -27,6 +36,11 @@ TOOLTIP_MAX_LATENCY = (
     "Techo en segundos: si el subtítulo provisional no se confirma a tiempo, se fuerza "
     "un commit. Más bajo = menos retraso, más riesgo de confirmar texto prematuro."
 )
+TOOLTIP_TX_BEAM = (
+    "Beam search del traductor. Más alto = mejor calidad y más CPU/latencia."
+)
+TOOLTIP_TX_LENGTH = "Penalización de longitud NLLB. ≈1.0 es neutro; algo >1 favorece salidas un poco más largas."
+TOOLTIP_TX_NGRAM = "Evita repetir n-gramas. 0 = desactivado; 3 suele reducir bucles raros en subtítulos."
 
 # Cinema lower-third: carbón profundo + ámbar de marquesina (no GNOME blue genérico).
 _SETTINGS_QSS = """
@@ -93,7 +107,7 @@ QLabel#ValueChip {
     font-weight: 600;
     min-width: 28px;
 }
-QComboBox, QSpinBox {
+QComboBox, QSpinBox, QDoubleSpinBox {
     background: #22262f;
     color: #eef0f4;
     border: 1px solid #3a4152;
@@ -101,10 +115,10 @@ QComboBox, QSpinBox {
     padding: 7px 10px;
     min-height: 18px;
 }
-QComboBox:hover, QSpinBox:hover {
+QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover {
     border-color: #5a6478;
 }
-QComboBox:focus, QSpinBox:focus {
+QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus {
     border-color: #e8b86d;
 }
 QComboBox::drop-down {
@@ -210,6 +224,30 @@ QCheckBox::indicator:checked {
     background: #e8b86d;
     border-color: #e8b86d;
 }
+QTabWidget::pane {
+    border: 1px solid #2c3140;
+    border-radius: 10px;
+    top: -1px;
+    background: transparent;
+}
+QTabBar::tab {
+    background: #1c1f27;
+    color: #8b93a7;
+    border: 1px solid #2c3140;
+    border-bottom: none;
+    border-top-left-radius: 8px;
+    border-top-right-radius: 8px;
+    padding: 8px 14px;
+    margin-right: 4px;
+}
+QTabBar::tab:selected {
+    background: #22262f;
+    color: #f4f5f7;
+    border-color: #3a4152;
+}
+QTabBar::tab:hover:!selected {
+    color: #e8b86d;
+}
 """
 
 
@@ -269,7 +307,9 @@ class InstallLanguagesDialog(QtWidgets.QDialog):
 
         pending = pending_languages(self._installed)
         if not pending:
-            empty = QtWidgets.QLabel("Todos los idiomas del catálogo ya están instalados.")
+            empty = QtWidgets.QLabel(
+                "Todos los idiomas del catálogo ya están instalados."
+            )
             empty.setObjectName("FieldHint")
             empty.setWordWrap(True)
             layout.addWidget(empty)
@@ -337,7 +377,9 @@ class _Section(QtWidgets.QWidget):
         )
         root.addLayout(self.body)
 
-    def add_row(self, label: str, widget: QtWidgets.QWidget, tip: str | None = None) -> None:
+    def add_row(
+        self, label: str, widget: QtWidgets.QWidget, tip: str | None = None
+    ) -> None:
         lab = QtWidgets.QLabel(label)
         lab.setObjectName("FieldLabel")
         if tip:
@@ -347,7 +389,9 @@ class _Section(QtWidgets.QWidget):
 
 
 class SettingsDialog(QtWidgets.QDialog):
-    def __init__(self, parent: QtWidgets.QWidget | None, config: dict[str, Any]) -> None:
+    def __init__(
+        self, parent: QtWidgets.QWidget | None, config: dict[str, Any]
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("SettingsDialog")
         self.setWindowTitle("Configuración de subtítulos")
@@ -360,6 +404,7 @@ class SettingsDialog(QtWidgets.QDialog):
         self._config = dict(config)
         if not isinstance(self._config.get("latency_profiles"), dict):
             self._config["latency_profiles"] = deepcopy(LATENCY_FACTORY_PRESETS)
+        self._config = validate_config(self._config)
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 16)
@@ -370,7 +415,9 @@ class SettingsDialog(QtWidgets.QDialog):
         title = QtWidgets.QLabel("Configuración")
         title.setObjectName("DialogTitle")
         header.addWidget(title)
-        subtitle = QtWidgets.QLabel("Captura, latencia y aspecto del overlay")
+        subtitle = QtWidgets.QLabel(
+            "Captura, latencia, aspecto y calidad de traducción"
+        )
         subtitle.setObjectName("DialogSubtitle")
         header.addWidget(subtitle)
         root.addLayout(header)
@@ -383,23 +430,59 @@ class SettingsDialog(QtWidgets.QDialog):
         preview_hint = QtWidgets.QLabel("VISTA PREVIA")
         preview_hint.setObjectName("PreviewHint")
         preview_layout.addWidget(preview_hint)
-        self._preview_caption = QtWidgets.QLabel("Hello, this is a live caption preview")
+        self._preview_caption = QtWidgets.QLabel(
+            "Hello, this is a live caption preview"
+        )
         self._preview_caption.setObjectName("PreviewCaption")
         self._preview_caption.setWordWrap(True)
         self._preview_caption.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
         preview_layout.addWidget(self._preview_caption)
         root.addWidget(self._preview_stage)
 
+        tabs = QtWidgets.QTabWidget()
+        tabs.addTab(self._build_general_tab(config), "General")
+        tabs.addTab(self._build_translation_tab(config), "Traducciones")
+        root.addWidget(tabs, stretch=1)
+
+        buttons = QtWidgets.QDialogButtonBox(
+            QtWidgets.QDialogButtonBox.StandardButton.Save
+            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        )
+        save_btn = buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Save)
+        cancel_btn = buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        assert save_btn is not None and cancel_btn is not None
+        save_btn.setText("Guardar")
+        save_btn.setObjectName("PrimaryButton")
+        cancel_btn.setText("Cancelar")
+        cancel_btn.setObjectName("DialogCancel")
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        root.addWidget(buttons)
+
+        self._loading_profile = False
+        self._loading_tx = False
+        self._load_profile_into_sliders(str(self.latency_mode.currentData()))
+        self._refresh_translation_preset_combo()
+        self._load_translation_decode_into_spins()
+        self._sync_translation_preset_actions()
+        self._refresh_preview()
+
+    def _wrap_scroll(self, body: QtWidgets.QWidget) -> QtWidgets.QScrollArea:
         scroll = QtWidgets.QScrollArea()
         scroll.setObjectName("SettingsScroll")
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
-        scroll.setHorizontalScrollBarPolicy(QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        scroll.setWidget(body)
+        return scroll
 
+    def _build_general_tab(self, config: dict[str, Any]) -> QtWidgets.QWidget:
         body = QtWidgets.QWidget()
         body.setObjectName("SettingsBody")
         body_layout = QtWidgets.QVBoxLayout(body)
-        body_layout.setContentsMargins(0, 0, 8, 0)
+        body_layout.setContentsMargins(0, 8, 8, 0)
         body_layout.setSpacing(18)
 
         capture = _Section("Captura")
@@ -501,7 +584,9 @@ class SettingsDialog(QtWidgets.QDialog):
         self.reset_btn = QtWidgets.QPushButton("Restablecer valores del modo")
         self.reset_btn.setObjectName("GhostButton")
         self.reset_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.reset_btn.setToolTip("Vuelve a los valores de fábrica del modo seleccionado.")
+        self.reset_btn.setToolTip(
+            "Vuelve a los valores de fábrica del modo seleccionado."
+        )
         self.reset_btn.clicked.connect(self._reset_mode)
         latency.body.addRow("", self.reset_btn)
 
@@ -556,8 +641,17 @@ class SettingsDialog(QtWidgets.QDialog):
         self.alpha.valueChanged.connect(self._on_alpha_changed)
         look.add_row("Transparencia", alpha_wrap)
         body_layout.addWidget(look)
+        body_layout.addStretch(1)
+        return self._wrap_scroll(body)
 
-        translate = _Section("Traducción")
+    def _build_translation_tab(self, config: dict[str, Any]) -> QtWidgets.QWidget:
+        body = QtWidgets.QWidget()
+        body.setObjectName("SettingsBody")
+        body_layout = QtWidgets.QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 8, 8, 0)
+        body_layout.setSpacing(18)
+
+        display = _Section("Visualización")
         self.second_line_mode = QtWidgets.QComboBox()
         second_line_labels = {
             "live_asr": "ASR en vivo",
@@ -573,31 +667,58 @@ class SettingsDialog(QtWidgets.QDialog):
             "Con traducción activa: línea 1 = traducción; línea 2 = ASR en vivo, "
             "solo el texto confirmado en el idioma original, o ninguna."
         )
-        translate.add_row("Segunda línea", self.second_line_mode)
-        body_layout.addWidget(translate)
-        body_layout.addStretch(1)
+        display.add_row("Segunda línea", self.second_line_mode)
+        body_layout.addWidget(display)
 
-        scroll.setWidget(body)
-        root.addWidget(scroll, stretch=1)
+        quality = _Section("Calidad de decoding")
+        self.tx_preset = QtWidgets.QComboBox()
+        self.tx_preset.currentIndexChanged.connect(self._on_tx_preset_changed)
+        quality.add_row("Preset", self.tx_preset)
 
-        buttons = QtWidgets.QDialogButtonBox(
-            QtWidgets.QDialogButtonBox.StandardButton.Save
-            | QtWidgets.QDialogButtonBox.StandardButton.Cancel
+        self.tx_beam = QtWidgets.QSpinBox()
+        self.tx_beam.setRange(1, 8)
+        self.tx_beam.valueChanged.connect(self._on_tx_decode_edited)
+        quality.add_row("Beam size", self.tx_beam, TOOLTIP_TX_BEAM)
+
+        self.tx_length = QtWidgets.QDoubleSpinBox()
+        self.tx_length.setRange(0.6, 1.5)
+        self.tx_length.setSingleStep(0.1)
+        self.tx_length.setDecimals(1)
+        self.tx_length.valueChanged.connect(self._on_tx_decode_edited)
+        quality.add_row("Length penalty", self.tx_length, TOOLTIP_TX_LENGTH)
+
+        self.tx_ngram = QtWidgets.QSpinBox()
+        self.tx_ngram.setRange(0, 5)
+        self.tx_ngram.valueChanged.connect(self._on_tx_decode_edited)
+        quality.add_row("No-repeat n-gram", self.tx_ngram, TOOLTIP_TX_NGRAM)
+
+        actions = QtWidgets.QHBoxLayout()
+        actions.setSpacing(8)
+        self.tx_save_btn = QtWidgets.QPushButton("Guardar como preset…")
+        self.tx_save_btn.setObjectName("SecondaryButton")
+        self.tx_save_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.tx_save_btn.clicked.connect(self._save_translation_preset)
+        self.tx_delete_btn = QtWidgets.QPushButton("Borrar preset")
+        self.tx_delete_btn.setObjectName("GhostButton")
+        self.tx_delete_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.tx_delete_btn.clicked.connect(self._delete_translation_preset)
+        actions.addWidget(self.tx_save_btn)
+        actions.addWidget(self.tx_delete_btn)
+        actions.addStretch(1)
+        actions_wrap = QtWidgets.QWidget()
+        actions_wrap.setLayout(actions)
+        quality.body.addRow("", actions_wrap)
+
+        tx_note = QtWidgets.QLabel(
+            "Rápido / Equilibrado / Calidad son de fábrica (no se borran). "
+            "Editar un valor pasa a Custom. Los cambios se aplican al Guardar sin reiniciar Whisper."
         )
-        save_btn = buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Save)
-        cancel_btn = buttons.button(QtWidgets.QDialogButtonBox.StandardButton.Cancel)
-        assert save_btn is not None and cancel_btn is not None
-        save_btn.setText("Guardar")
-        save_btn.setObjectName("PrimaryButton")
-        cancel_btn.setText("Cancelar")
-        cancel_btn.setObjectName("DialogCancel")
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        root.addWidget(buttons)
-
-        self._loading_profile = False
-        self._load_profile_into_sliders(str(self.latency_mode.currentData()))
-        self._refresh_preview()
+        tx_note.setObjectName("FieldHint")
+        tx_note.setWordWrap(True)
+        quality.body.addRow("", tx_note)
+        body_layout.addWidget(quality)
+        body_layout.addStretch(1)
+        return self._wrap_scroll(body)
 
     def _set_swatch(self, button: QtWidgets.QPushButton, hex_color: str) -> None:
         color = QtGui.QColor(hex_color)
@@ -690,7 +811,9 @@ class SettingsDialog(QtWidgets.QDialog):
         return str(data) if data else "stable"
 
     def _profiles(self) -> dict[str, dict[str, float | int]]:
-        profiles = self._config.setdefault("latency_profiles", deepcopy(LATENCY_FACTORY_PRESETS))
+        profiles = self._config.setdefault(
+            "latency_profiles", deepcopy(LATENCY_FACTORY_PRESETS)
+        )
         if not isinstance(profiles, dict):
             profiles = deepcopy(LATENCY_FACTORY_PRESETS)
             self._config["latency_profiles"] = profiles
@@ -717,7 +840,9 @@ class SettingsDialog(QtWidgets.QDialog):
         current["agreement_n"] = int(self.confidence.value())
         current["max_latency_sec"] = self.max_latency.value() / 10.0
         if "min_chunk_seconds" not in current:
-            current["min_chunk_seconds"] = LATENCY_FACTORY_PRESETS[mode]["min_chunk_seconds"]
+            current["min_chunk_seconds"] = LATENCY_FACTORY_PRESETS[mode][
+                "min_chunk_seconds"
+            ]
         profiles[mode] = current
         self._config["latency_profiles"] = profiles
 
@@ -737,6 +862,143 @@ class SettingsDialog(QtWidgets.QDialog):
         self._config = reset_latency_profile(self._config, mode)
         self._load_profile_into_sliders(mode)
 
+    def _current_tx_preset(self) -> str:
+        data = self.tx_preset.currentData()
+        return str(data) if data else "balanced"
+
+    def _translation_profiles(self) -> dict[str, dict[str, float | int]]:
+        profiles = self._config.setdefault(
+            "translation_profiles",
+            {
+                **deepcopy(TRANSLATION_FACTORY_PRESETS),
+                "custom": deepcopy(TRANSLATION_FACTORY_PRESETS["balanced"]),
+            },
+        )
+        if not isinstance(profiles, dict):
+            profiles = {
+                **deepcopy(TRANSLATION_FACTORY_PRESETS),
+                "custom": deepcopy(TRANSLATION_FACTORY_PRESETS["balanced"]),
+            }
+            self._config["translation_profiles"] = profiles
+        return profiles
+
+    def _spins_decode(self) -> dict[str, float | int]:
+        return {
+            "beam_size": int(self.tx_beam.value()),
+            "length_penalty": float(self.tx_length.value()),
+            "no_repeat_ngram_size": int(self.tx_ngram.value()),
+        }
+
+    def _refresh_translation_preset_combo(self) -> None:
+        current = str(self._config.get("translation_decode_preset", "balanced"))
+        self.tx_preset.blockSignals(True)
+        self.tx_preset.clear()
+        for preset_id in ("fast", "balanced", "quality", "custom"):
+            label = TRANSLATION_PRESET_LABELS.get(preset_id, preset_id)
+            self.tx_preset.addItem(label, preset_id)
+        for preset_id in translation_user_preset_ids(self._config):
+            self.tx_preset.addItem(preset_id, preset_id)
+        idx = self.tx_preset.findData(current)
+        self.tx_preset.setCurrentIndex(
+            idx if idx >= 0 else self.tx_preset.findData("balanced")
+        )
+        self.tx_preset.blockSignals(False)
+
+    def _load_translation_decode_into_spins(self) -> None:
+        self._loading_tx = True
+        try:
+            decode = effective_translation_decode(
+                {
+                    **self._config,
+                    "translation_decode_preset": self._current_tx_preset(),
+                }
+            )
+            self.tx_beam.setValue(int(decode["beam_size"]))
+            self.tx_length.setValue(float(decode["length_penalty"]))
+            self.tx_ngram.setValue(int(decode["no_repeat_ngram_size"]))
+        finally:
+            self._loading_tx = False
+
+    def _write_spins_to_custom_profile(self) -> None:
+        profiles = self._translation_profiles()
+        profiles["custom"] = self._spins_decode()
+        self._config["translation_profiles"] = profiles
+        self._config["translation_decode_preset"] = "custom"
+
+    def _on_tx_preset_changed(self) -> None:
+        preset = self._current_tx_preset()
+        self._config["translation_decode_preset"] = preset
+        self._load_translation_decode_into_spins()
+        self._sync_translation_preset_actions()
+
+    def _on_tx_decode_edited(self, *_args: Any) -> None:
+        if self._loading_tx:
+            return
+        self._write_spins_to_custom_profile()
+        if self._current_tx_preset() != "custom":
+            self.tx_preset.blockSignals(True)
+            idx = self.tx_preset.findData("custom")
+            if idx >= 0:
+                self.tx_preset.setCurrentIndex(idx)
+            self.tx_preset.blockSignals(False)
+        self._sync_translation_preset_actions()
+
+    def _sync_translation_preset_actions(self) -> None:
+        preset = self._current_tx_preset()
+        self.tx_delete_btn.setEnabled(preset not in TRANSLATION_RESERVED_PRESET_IDS)
+
+    def _save_translation_preset(self) -> None:
+        name, ok = QtWidgets.QInputDialog.getText(
+            self,
+            "Guardar preset",
+            "Nombre del preset:",
+        )
+        if not ok:
+            return
+        slug = slugify_translation_preset_name(name)
+        if not slug:
+            QtWidgets.QMessageBox.warning(self, "Preset", "Nombre vacío o inválido.")
+            return
+        if slug in TRANSLATION_RESERVED_PRESET_IDS:
+            QtWidgets.QMessageBox.warning(
+                self,
+                "Preset",
+                f"«{slug}» está reservado. Elige otro nombre.",
+            )
+            return
+        try:
+            self._config = add_translation_user_preset(
+                self._config,
+                slug,
+                self._spins_decode(),
+            )
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(self, "Preset", str(exc))
+            return
+        self._refresh_translation_preset_combo()
+        self._load_translation_decode_into_spins()
+        self._sync_translation_preset_actions()
+
+    def _delete_translation_preset(self) -> None:
+        preset = self._current_tx_preset()
+        if preset in TRANSLATION_RESERVED_PRESET_IDS:
+            return
+        answer = QtWidgets.QMessageBox.question(
+            self,
+            "Borrar preset",
+            f"¿Borrar el preset «{preset}»?",
+        )
+        if answer != QtWidgets.QMessageBox.StandardButton.Yes:
+            return
+        try:
+            self._config = delete_translation_user_preset(self._config, preset)
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(self, "Preset", str(exc))
+            return
+        self._refresh_translation_preset_combo()
+        self._load_translation_decode_into_spins()
+        self._sync_translation_preset_actions()
+
     def _pick_font_color(self) -> None:
         color = QtWidgets.QColorDialog.getColor(
             QtGui.QColor(self.font_color_btn.text()), self
@@ -755,6 +1017,11 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def result_config(self) -> dict[str, Any]:
         self._write_sliders_to_profile()
+        preset = self._current_tx_preset()
+        if preset == "custom":
+            self._write_spins_to_custom_profile()
+        else:
+            self._config["translation_decode_preset"] = preset
         lang = str(self.language.currentData() or "en").strip().lower() or "en"
         installed = merge_installed_languages(self._installed_languages(), [lang])
         audio = self.audio.currentData()
@@ -774,7 +1041,11 @@ class SettingsDialog(QtWidgets.QDialog):
                 "font_color": self.font_color_btn.text(),
                 "bg_color": self.bg_color_btn.text(),
                 "bg_alpha": self.alpha.value() / 100.0,
-                "second_line_mode": str(self.second_line_mode.currentData() or "live_asr"),
+                "second_line_mode": str(
+                    self.second_line_mode.currentData() or "live_asr"
+                ),
+                "translation_decode_preset": preset,
+                "translation_profiles": deepcopy(self._translation_profiles()),
             }
         )
-        return cfg
+        return validate_config(cfg)

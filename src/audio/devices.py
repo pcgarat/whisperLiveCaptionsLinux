@@ -21,7 +21,9 @@ def list_audio_monitors(pactl_bin: str | None = None) -> list[str]:
             text=True,
         )
     except subprocess.CalledProcessError as exc:
-        raise RuntimeError(f"Falló `pactl list sources short`: {exc.stderr.strip()}") from exc
+        raise RuntimeError(
+            f"Falló `pactl list sources short`: {exc.stderr.strip()}"
+        ) from exc
 
     return parse_pactl_sources_short(proc.stdout)
 

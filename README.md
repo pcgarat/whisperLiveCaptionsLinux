@@ -31,13 +31,14 @@ La primera ejecución crea `.venv`, instala dependencias y puede descargar el mo
 Cambiar modo, profiles, modelo, dispositivo o idioma ASR **reinicia el pipeline**.
 El toggle de traducción hace **hot-swap** del traductor (no recarga Whisper).
 
-### Traducción EN→ES (fase 2.2)
+### Traducción EN→ES (fase 2.2 + 2.4)
 
 - En el overlay: clic en el código de idioma (`EN`/`ES`/…) para cambiar entre `installed_languages`.
-- En Settings: selector de idiomas instalados + **Instalar nuevos…** (catálogo fijo: en/es/fr/de/it/pt; sin descarga).
+- En Settings → pestaña **Traducciones**: segunda línea + presets de calidad de decoding (`Rápido` / `Equilibrado` / `Calidad` / `Custom` + presets propios).
 - Botón **ES** (toggle): activa/desactiva traducción. Persiste en `config.json`.
-- Con traducción ON: línea 1 = español (solo texto ASR **confirmado**); línea 2 según Settings → **Segunda línea**: ASR en vivo, idioma original, o nada.
+- Con traducción ON: línea 1 = español (solo texto ASR **confirmado**); línea 2 según **Segunda línea**: ASR en vivo, idioma original, o nada.
 - Con idioma `es` o toggle OFF: no se traduce (passthrough).
+- Cambiar preset/knobs de decoding y Guardar hace **hot-swap** (no reinicia Whisper).
 - Modelo: `JustFrederik/nllb-200-distilled-600M-ct2-int8` (alias config `nllb-200-distilled-ct2`).
   - Primera activación descarga ~600 MB a la caché de Hugging Face.
   - VRAM: Whisper medium + NLLB int8; si CUDA falla al cargar, reintenta en CPU.

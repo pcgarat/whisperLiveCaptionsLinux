@@ -89,7 +89,9 @@ class AppController:
         try:
             self._start_pipeline()
         except Exception as exc:
-            QtWidgets.QMessageBox.critical(self.overlay, "Error al reiniciar ASR", str(exc))
+            QtWidgets.QMessageBox.critical(
+                self.overlay, "Error al reiniciar ASR", str(exc)
+            )
 
     def _hot_swap_translator(self) -> None:
         if self.pipeline is None:
@@ -126,8 +128,12 @@ class AppController:
             "translation_enabled",
             "translation_target",
             "translator_model",
+            "translation_decode_preset",
+            "translation_profiles",
         )
-        asr_restart = any(new_cfg.get(k) != self.config.get(k) for k in asr_restart_keys)
+        asr_restart = any(
+            new_cfg.get(k) != self.config.get(k) for k in asr_restart_keys
+        )
         translation_only = (not asr_restart) and any(
             new_cfg.get(k) != self.config.get(k) for k in translation_keys
         )

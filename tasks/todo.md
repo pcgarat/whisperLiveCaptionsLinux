@@ -1,44 +1,45 @@
-# Tasks: Fase 2.3 — Instalar idiomas
+# Tasks: Fase 2.4 — Presets de calidad de traducción
 
-Spec: `docs/specs/fase2.3-instalar-idiomas-2026-09-13.md`  
+Spec: `docs/specs/fase2.4-traduccion-presets-calidad-2026-09-13.md`  
 Plan: `tasks/plan.md`
 
 **Estado:** implementación completa (2026-09-13). Pendiente smoke manual.
 
 ---
 
-## Task 1: Catálogo de idiomas
-
-**Description:** Crear `src/asr/languages.py` con `AVAILABLE_LANGUAGES`, helpers de etiqueta/merge; alinear claves con `NLLB_LANG_CODES`; tests.
+## Task 1: Config decode presets
 
 **Acceptance criteria:**
-- [x] Catálogo con al menos en/es/fr/de/it/pt
-- [x] `merge_installed_languages` añade sin duplicar
-- [x] Claves del catálogo == claves NLLB
+- [x] Default `balanced` en config nueva
+- [x] Fábrica se re-sincroniza al validar
+- [x] Custom y perfiles usuario persisten; ids fábrica no borrables
+- [x] Clamps según spec
 
 **Verification:**
-- [x] `pytest -q tests/test_languages.py`
-
-**Dependencies:** None  
-**Files:** `src/asr/languages.py`, `src/asr/translate.py`, `tests/test_languages.py`  
-**Scope:** Small
+- [x] `pytest -q tests/test_config.py`
 
 ---
 
-## Task 2: Settings UI + docs
-
-**Description:** Combo de idioma instalado; diálogo instalar con checks; refresco del combo; README.
+## Task 2: Aplicar decode en NLLB + pipeline
 
 **Acceptance criteria:**
-- [x] Selector Settings solo muestra instalados
-- [x] Instalar seleccionados los añade y refresca combo
-- [x] `result_config()` incluye `installed_languages` actualizado
-- [x] README menciona el flujo
+- [x] `translate` usa decode params
+- [x] Cambio de preset sin reiniciar Whisper
+- [x] `no_repeat_ngram_size=0` no activa filtro
 
 **Verification:**
-- [x] `pytest -q`
-- [ ] Manual: instalar fr → Guardar → overlay muestra FR
+- [x] `pytest -q tests/test_translate.py tests/test_pipeline_translate.py`
 
-**Dependencies:** Task 1  
-**Files:** `src/ui/settings.py`, `src/ui/overlay.py`, `README.md`, `tasks/todo.md`  
-**Scope:** Medium
+---
+
+## Task 3: Pestaña Traducciones en Settings
+
+**Acceptance criteria:**
+- [x] Dos pestañas: General / Traducciones
+- [x] Editar spin → preset `custom`
+- [x] Guardar como preset y borrar usuario
+- [x] Fábrica no borrable
+
+**Verification:**
+- [x] `make test` (48 passed) + `make lint`
+- [ ] Manual: crear preset, reiniciar app, sigue seleccionado; comparar Rápido vs Calidad
