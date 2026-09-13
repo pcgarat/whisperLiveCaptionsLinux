@@ -12,6 +12,7 @@ from src.config import (
     delete_translation_user_preset,
     effective_latency_profile,
     effective_translation_decode,
+    factory_app_preset_ids,
     load_config,
     reset_latency_profile,
     save_config,
@@ -34,13 +35,13 @@ def test_load_missing_returns_defaults(tmp_path: Path) -> None:
     )
     assert cfg["translation_enabled"] is True
     assert cfg["translation_target"] == "es"
-    assert cfg["translation_sticky_mode"] == "off"
+    assert cfg["translation_sticky_mode"] == DEFAULTS["translation_sticky_mode"]
     assert cfg["second_line_mode"] == "none"
     assert cfg["captions_show_partials"] is False
     assert cfg["captions_allow_rewrite"] is True
     assert cfg["installed_languages"] == ["en", "es", "fr", "de", "it", "pt"]
-    assert cfg["translator_model"] == "nllb-200-distilled-ct2"
-    assert cfg["translation_decode_preset"] == "custom"
+    assert cfg["translator_model"] == DEFAULTS["translator_model"]
+    assert cfg["translation_decode_preset"] == DEFAULTS["translation_decode_preset"]
     assert (
         cfg["translation_profiles"]["balanced"]
         == TRANSLATION_FACTORY_PRESETS["balanced"]
@@ -49,7 +50,8 @@ def test_load_missing_returns_defaults(tmp_path: Path) -> None:
         cfg["translation_profiles"]["custom"] == TRANSLATION_FACTORY_PRESETS["balanced"]
     )
     assert cfg["app_preset"] == DEFAULTS["app_preset"]
-    assert set(cfg["app_presets"]) == set(DEFAULTS["app_presets"])
+    # Los snapshots no viven en DEFAULTS: se siembran desde el catálogo.
+    assert set(cfg["app_presets"]) == set(factory_app_preset_ids())
     assert cfg["text_align"] == "left"
     assert cfg["font_size"] == 26
 
@@ -193,7 +195,10 @@ def test_migrate_legacy_show_asr_line_to_second_line_mode() -> None:
 
 
 def test_translation_sticky_mode_defaults_and_clamp() -> None:
-    assert validate_config({})["translation_sticky_mode"] == "off"
+    assert (
+        validate_config({})["translation_sticky_mode"]
+        == DEFAULTS["translation_sticky_mode"]
+    )
     assert validate_config({"translation_sticky_mode": "committed"})[
         "translation_sticky_mode"
     ] == "committed"
@@ -255,6 +260,7 @@ def test_reset_latency_profile_restores_factory() -> None:
 def test_translation_decode_defaults_and_factory_resync() -> None:
     cfg = validate_config(
         {
+            "translation_decode_preset": "custom",
             "translation_profiles": {
                 "balanced": {
                     "beam_size": 1,

@@ -329,13 +329,15 @@ flowchart TD
 
 
 
-| Pieza         | Detalle                                                                                  |
-| ------------- | ---------------------------------------------------------------------------------------- |
-| Factory       | `create_translator()` → `NllbCt2Translator` o `NullTranslator`                           |
-| Alias default | `nllb-200-distilled-ct2` → HF `JustFrederik/nllb-200-distilled-600M-ct2-int8`            |
-| Compute NLLB  | `int8` fijo (independiente de `compute_type` Whisper)                                    |
-| Fallback      | CUDA → CPU con `notice` en overlay                                                       |
-| Decode        | `effective_translation_decode()` desde preset + profiles; `max_decoding_length=256` fijo |
+| Pieza          | Detalle                                                                                   |
+| -------------- | ----------------------------------------------------------------------------------------- |
+| Factory        | `create_translator()` → `MarianCt2Translator`, `NllbCt2Translator` o `NullTranslator`      |
+| Motor default  | `opus-mt-tc-big` → Marian CT2 int8 local, un modelo por idioma (`src/asr/opusmt.py`)       |
+| Motor alterno  | `nllb-200-distilled-ct2` → HF `JustFrederik/nllb-200-distilled-600M-ct2-int8`             |
+| Identidad      | `translator_fingerprint()`; incluye `language` solo si el motor elige modelo por idioma    |
+| Compute        | Marian `int8_float16`, NLLB `int8`; ambos independientes del `compute_type` de Whisper     |
+| Fallback       | CUDA → CPU con `notice` en overlay (los dos motores)                                       |
+| Decode         | `effective_translation_decode()` desde preset + profiles; `max_decoding_length` 96 Marian / 256 NLLB |
 
 
 Helpers puros (testeables): `plan_off_translation`, `plan_sticky_translation` en `pipeline.py`.
@@ -419,24 +421,26 @@ Los campos top-level `agreement_n` / `max_latency_sec` / `min_chunk_seconds` se 
 
 | Parámetro                   | Default                      | Efecto          |
 | --------------------------- | ---------------------------- | --------------- |
-| `translation_enabled`       | `false`                      | Activa NLLB     |
+| `translation_enabled`       | `false`                      | Activa traductor |
 | `translation_target`        | `es`                         | Destino ISO     |
 | `translation_sticky_mode`   | `off`                        | `off`           |
-| `translator_model`          | `nllb-200-distilled-ct2`     | Alias/repo CT2  |
+| `translator_model`          | `opus-mt-tc-big`             | Motor, alias o repo CT2 |
 | `translation_decode_preset` | `balanced`                   | Preset activo   |
 | `translation_profiles`      | fast/balanced/quality/custom | Knobs decode    |
 | `installed_languages`       | `["en","es"]`                | Menú de idiomas |
 | `second_line_mode`          | `live_asr`                   | Layout 2ª línea |
 
 
-Decoding NLLB (fábrica):
+Decoding de traducción (fábrica). `beam_size` es lo único que los distingue: es el knob
+de latencia. `length_penalty` 0.7 en los tres porque con 1.0 el decoder rellena los
+fragmentos cortos (medido; ver spec de la fase 2.9).
 
 
 | Preset     | `beam_size`              | `length_penalty` | `no_repeat_ngram_size` |
 | ---------- | ------------------------ | ---------------- | ---------------------- |
-| `fast`     | 2                        | 1.0              | 0                      |
-| `balanced` | 4                        | 1.0              | 3                      |
-| `quality`  | 6                        | 1.1              | 3                      |
+| `fast`     | 2                        | 0.7              | 3                      |
+| `balanced` | 4                        | 0.7              | 3                      |
+| `quality`  | 6                        | 0.7              | 3                      |
 | `custom`   | editable (seed balanced) | editable         | editable               |
 
 

@@ -35,6 +35,8 @@ rsync -a --delete \
 rsync -a --delete "$ROOT/packaging/" "$APP_ROOT/packaging/"
 rsync -a --delete "$ROOT/assets/" "$APP_ROOT/assets/"
 cp "$ROOT/requirements.txt" "$ROOT/config.example.json" "$APP_ROOT/"
+mkdir -p "$APP_ROOT/scripts"
+cp "$ROOT/scripts/prefetch-models.py" "$APP_ROOT/scripts/"
 
 if [[ ! -d "$APP_ROOT/.venv" ]]; then
   "$PYTHON" -m venv "$APP_ROOT/.venv"
@@ -43,6 +45,18 @@ fi
 source "$APP_ROOT/.venv/bin/activate"
 pip install -q -U pip
 pip install -q -r "$APP_ROOT/requirements.txt"
+
+# Precarga: sin esto, el primer arranque de un preset baja gigas en caliente y,
+# en el caso de Opus-MT, convierte a CT2 con la app ya abierta.
+# Un fallo de red no debe tumbar la instalación; la app los bajará al usarlos.
+if [[ -n "${WLCL_SKIP_MODEL_PREFETCH:-}" ]]; then
+  echo "Precarga de modelos saltada (WLCL_SKIP_MODEL_PREFETCH)."
+else
+  echo "Descargando y convirtiendo modelos de los presets (~4 GB de descarga)…"
+  if ! python "$APP_ROOT/scripts/prefetch-models.py"; then
+    echo "aviso: falló la precarga de modelos; la app los bajará al usarlos." >&2
+  fi
+fi
 
 cat >"$BIN_PATH" <<EOF
 #!/usr/bin/env bash

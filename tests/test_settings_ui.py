@@ -100,6 +100,32 @@ def test_settings_captions_display_toggles(qapp: QtWidgets.QApplication) -> None
     dlg.close()
 
 
+def test_settings_translator_model(qapp: QtWidgets.QApplication) -> None:
+    from src.asr.translate import TRANSLATOR_MODEL_1_3B, TRANSLATOR_MODEL_600M
+
+    dlg = SettingsDialog(
+        None, validate_config({"translator_model": TRANSLATOR_MODEL_1_3B})
+    )
+    assert dlg.translator_model.currentData() == TRANSLATOR_MODEL_1_3B
+    idx = dlg.translator_model.findData(TRANSLATOR_MODEL_600M)
+    assert idx >= 0
+    dlg.translator_model.setCurrentIndex(idx)
+    assert dlg.result_config()["translator_model"] == TRANSLATOR_MODEL_600M
+    dlg.close()
+
+
+def test_settings_translator_model_keeps_custom_repo(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    """Un repo propio en config no se pierde al guardar desde la UI."""
+    dlg = SettingsDialog(
+        None, validate_config({"translator_model": "yo/mi-conversion-ct2"})
+    )
+    assert dlg.translator_model.currentData() == "yo/mi-conversion-ct2"
+    assert dlg.result_config()["translator_model"] == "yo/mi-conversion-ct2"
+    dlg.close()
+
+
 def test_settings_compute_type(qapp: QtWidgets.QApplication) -> None:
     dlg = SettingsDialog(
         None, validate_config({"compute_type": "int8_float16"})
@@ -379,13 +405,14 @@ def test_app_preset_bar_save_as_and_guardar(
 
 
 def test_app_preset_factory_delete_disabled(qapp: QtWidgets.QApplication) -> None:
-    from src.config import APP_PRESET_DEFAULT
+    from src.presets import is_factory_preset
 
     ctrl = _FakeAppPresetController()
     ctrl.cfg = validate_config({})
-    assert ctrl.cfg["app_preset"] == APP_PRESET_DEFAULT
+    active = ctrl.cfg["app_preset"]
+    assert is_factory_preset(active)
     dlg = SettingsDialog(None, ctrl.cfg, controller=ctrl)
-    assert dlg.app_preset.currentData() == APP_PRESET_DEFAULT
+    assert dlg.app_preset.currentData() == active
     assert dlg.app_preset_save_btn.isEnabled() is True
     assert dlg.app_preset_delete_btn.isEnabled() is False
     dlg.close()

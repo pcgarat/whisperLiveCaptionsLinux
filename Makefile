@@ -1,4 +1,4 @@
-.PHONY: help venv install run debug test lint format clean devices config-init check install-user uninstall-user
+.PHONY: help venv install run debug test lint format clean devices config-init check install-user uninstall-user prefetch-models
 
 PYTHON ?= python3.12
 VENV   := .venv
@@ -49,6 +49,9 @@ check: test lint ## Tests + lint
 
 devices: install ## Lista monitores PipeWire/Pulse disponibles
 	$(BIN)/python -c "from src.audio.devices import list_audio_monitors; print('\n'.join(list_audio_monitors()) or '(ninguno)')"
+
+prefetch-models: install ## Descarga los modelos de los presets de fábrica (~3 GB)
+	$(BIN)/python scripts/prefetch-models.py
 
 config-init: ## Copia config.example.json → config.json si no existe
 	@if [ -f config.json ]; then \

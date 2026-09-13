@@ -6,13 +6,52 @@ from typing import Any, Protocol
 
 logger = logging.getLogger(__name__)
 
-# Alias de config → repo Hugging Face (CT2 int8, ~600M).
-# Tokenizer vía `tokenizers` (sin transformers). Modelo: NLLB-200 distilled.
-NLLB_CT2_MODEL_ID = "JustFrederik/nllb-200-distilled-600M-ct2-int8"
-TRANSLATOR_MODEL_ALIASES: dict[str, str] = {
-    "nllb-200-distilled-ct2": NLLB_CT2_MODEL_ID,
-    NLLB_CT2_MODEL_ID: NLLB_CT2_MODEL_ID,
+# Catálogo de traductores. Dos motores con procedencias distintas:
+#   - Opus-MT (Marian): ZIP de CSC convertido a CT2 en la instalación, un modelo
+#     por idioma de origen. Ver `src/asr/opusmt.py`.
+#   - NLLB-200 distilled: repo CT2 ya hecho en Hugging Face, un solo modelo
+#     multilingüe. Tokenizer vía `tokenizers` (sin transformers).
+NLLB_600M_CT2_MODEL_ID = "JustFrederik/nllb-200-distilled-600M-ct2-int8"
+NLLB_1_3B_CT2_MODEL_ID = "OpenNMT/nllb-200-distilled-1.3B-ct2-int8"
+
+TRANSLATOR_MODEL_OPUS_MT = "opus-mt-tc-big"
+TRANSLATOR_MODEL_600M = "nllb-200-distilled-ct2"
+TRANSLATOR_MODEL_1_3B = "nllb-200-distilled-1.3b-ct2"
+
+# Opus-MT por defecto: medido en RTX 4060 gana a NLLB en las tres dimensiones que
+# importan aquí (VRAM ~300 MB vs ~2 GB, 8 ms vs 49 ms por frase) y no alucina en
+# fragmentos cortos. NLLB se mantiene para idiomas sin `tc-big` hacia español.
+DEFAULT_TRANSLATOR_MODEL = TRANSLATOR_MODEL_OPUS_MT
+
+NLLB_MODEL_IDS: dict[str, str] = {
+    TRANSLATOR_MODEL_600M: NLLB_600M_CT2_MODEL_ID,
+    TRANSLATOR_MODEL_1_3B: NLLB_1_3B_CT2_MODEL_ID,
 }
+
+# Orden de aparición en el selector de Settings.
+TRANSLATOR_MODEL_IDS: dict[str, str] = {
+    TRANSLATOR_MODEL_OPUS_MT: TRANSLATOR_MODEL_OPUS_MT,
+    **NLLB_MODEL_IDS,
+}
+TRANSLATOR_MODEL_LABELS: dict[str, str] = {
+    TRANSLATOR_MODEL_OPUS_MT: "Opus-MT tc-big — recomendado (~0,3 GB VRAM)",
+    TRANSLATOR_MODEL_600M: "NLLB 600M — multilingüe (~1,1 GB VRAM)",
+    TRANSLATOR_MODEL_1_3B: "NLLB 1.3B — multilingüe (~2,0 GB VRAM)",
+}
+
+# Compat: nombre previo del único modelo soportado.
+NLLB_CT2_MODEL_ID = NLLB_600M_CT2_MODEL_ID
+
+# Se aceptan también los repo IDs directos, para poder apuntar a una conversión propia.
+TRANSLATOR_MODEL_ALIASES: dict[str, str] = {
+    **TRANSLATOR_MODEL_IDS,
+    **{repo: repo for repo in NLLB_MODEL_IDS.values()},
+}
+
+
+def is_opus_mt_model(model: str | None) -> bool:
+    key = (model or DEFAULT_TRANSLATOR_MODEL).strip() or DEFAULT_TRANSLATOR_MODEL
+    return key.lower() == TRANSLATOR_MODEL_OPUS_MT
 
 # Códigos ISO → etiquetas NLLB-200. Claves alineadas con AVAILABLE_LANGUAGES.
 NLLB_LANG_CODES: dict[str, str] = {
@@ -51,6 +90,10 @@ class NllbCt2Translator:
 
     Modelo por defecto: ``JustFrederik/nllb-200-distilled-600M-ct2-int8``
     (alias de config: ``nllb-200-distilled-ct2``). Lazy-load vía huggingface_hub.
+
+    Ya no es el motor por defecto: alucina en fragmentos cortos de subtítulo. Se
+    mantiene como salida para idiomas que no tengan un Opus-MT `tc-big` hacia
+    español, donde sus 200 idiomas siguen siendo la única opción local.
     """
 
     _CPU_FALLBACK_NOTICE = (
@@ -59,7 +102,7 @@ class NllbCt2Translator:
 
     def __init__(
         self,
-        model_id: str = NLLB_CT2_MODEL_ID,
+        model_id: str = NLLB_600M_CT2_MODEL_ID,
         device: str = "cuda",
         compute_type: str = "int8",
     ) -> None:
@@ -177,16 +220,42 @@ class NllbCt2Translator:
 
 
 def resolve_translator_model_id(model: str | None) -> str:
-    key = (model or "nllb-200-distilled-ct2").strip() or "nllb-200-distilled-ct2"
-    return TRANSLATOR_MODEL_ALIASES.get(key, key)
+    key = (model or DEFAULT_TRANSLATOR_MODEL).strip() or DEFAULT_TRANSLATOR_MODEL
+    if key in TRANSLATOR_MODEL_ALIASES:
+        return TRANSLATOR_MODEL_ALIASES[key]
+    # Los alias van en minúsculas; los repo IDs conservan mayúsculas.
+    return TRANSLATOR_MODEL_ALIASES.get(key.lower(), key)
+
+
+def translator_fingerprint(config: dict[str, Any]) -> tuple[bool, str, str, str]:
+    """Identidad del traductor: si cambia, hay que recrearlo.
+
+    Opus-MT elige el modelo según el idioma de origen, así que ahí el idioma forma
+    parte de la identidad; NLLB es un solo modelo multilingüe y recargarlo al
+    cambiar de idioma serían 1,4 GB de trabajo inútil.
+    """
+    model = str(config.get("translator_model") or DEFAULT_TRANSLATOR_MODEL)
+    language = str(config.get("language") or "en") if is_opus_mt_model(model) else ""
+    return (
+        bool(config.get("translation_enabled", False)),
+        model,
+        str(config.get("device") or "cuda"),
+        language,
+    )
 
 
 def create_translator(config: dict[str, Any]) -> Translator:
-    """Factory: Null si traducción OFF; NLLB CT2 si ON."""
+    """Factory: Null si traducción OFF; si no, el motor que pida `translator_model`."""
     if not bool(config.get("translation_enabled", False)):
         return NullTranslator()
-    return NllbCt2Translator(
-        model_id=str(config.get("translator_model") or "nllb-200-distilled-ct2"),
-        device=str(config.get("device") or "cuda"),
-        compute_type="int8",
-    )
+    model = str(config.get("translator_model") or DEFAULT_TRANSLATOR_MODEL)
+    device = str(config.get("device") or "cuda")
+    if is_opus_mt_model(model):
+        from src.asr.opusmt import MarianCt2Translator
+
+        return MarianCt2Translator(
+            source_lang=str(config.get("language") or "en"),
+            device=device,
+            compute_type="int8_float16",
+        )
+    return NllbCt2Translator(model_id=model, device=device, compute_type="int8")

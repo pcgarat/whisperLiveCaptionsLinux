@@ -84,3 +84,15 @@ def test_load_missing_under_xdg_returns_defaults(
     monkeypatch.setenv(ENV_CONFIG_DIR, str(tmp_path / "empty"))
     cfg = load_config()
     assert cfg["language"] == validate_config({})["language"]
+
+
+def test_installer_prefetches_models_without_blocking_install() -> None:
+    installer = (
+        Path(__file__).resolve().parent.parent / "scripts" / "install-user.sh"
+    )
+    script = installer.read_text(encoding="utf-8")
+    assert 'cp "$ROOT/scripts/prefetch-models.py" "$APP_ROOT/scripts/"' in script
+    assert 'python "$APP_ROOT/scripts/prefetch-models.py"' in script
+    assert "WLCL_SKIP_MODEL_PREFETCH" in script
+    # Un fallo de descarga avisa pero no aborta la instalación.
+    assert 'if ! python "$APP_ROOT/scripts/prefetch-models.py"; then' in script

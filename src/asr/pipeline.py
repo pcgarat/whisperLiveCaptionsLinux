@@ -9,7 +9,7 @@ from typing import Any
 
 from src.asr.engine import WhisperEngine
 from src.asr.streaming import LocalAgreementStreamer
-from src.asr.translate import Translator, create_translator
+from src.asr.translate import Translator, create_translator, translator_fingerprint
 from src.asr.types import CaptionUpdate
 from src.audio.capture import AudioRingBuffer, ChunkPump, SystemAudioCapture
 from src.config import (
@@ -120,11 +120,7 @@ class AsrPipeline:
         self._translator: Translator = (
             translator if translator is not None else create_translator(config)
         )
-        self._tx_fingerprint = (
-            bool(config.get("translation_enabled", False)),
-            str(config.get("translator_model") or "nllb-200-distilled-ct2"),
-            str(config.get("device") or "cuda"),
-        )
+        self._tx_fingerprint = translator_fingerprint(config)
         profile = effective_latency_profile(config)
         self._streamer = LocalAgreementStreamer(
             agreement_n=int(profile["agreement_n"]),
@@ -255,11 +251,7 @@ class AsrPipeline:
 
     def apply_translation_settings(self, config: dict[str, Any]) -> None:
         """Hot-swap de flags/decode; recrea Translator solo si cambia motor/enable."""
-        fingerprint = (
-            bool(config.get("translation_enabled", False)),
-            str(config.get("translator_model") or "nllb-200-distilled-ct2"),
-            str(config.get("device") or "cuda"),
-        )
+        fingerprint = translator_fingerprint({**self.config, **config})
         with self._tx_lock:
             prev_sticky = str(
                 self.config.get("translation_sticky_mode") or "off"
