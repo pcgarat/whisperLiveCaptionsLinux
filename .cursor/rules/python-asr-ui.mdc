@@ -1,0 +1,37 @@
+---
+description: Reglas de hilos, ASR y contratos Python en src/
+globs: src/**/*.py
+alwaysApply: false
+---
+
+# Python: ASR, audio y UI
+
+## Hilos
+
+- Inferencia ASR y captura de audio **nunca** en el hilo de Qt.
+- UI solo consume `queue.Queue[CaptionUpdate]` (timer/señales).
+- Cierre: `stop()` cooperativo de captura + pipeline sin deadlock.
+
+## Contrato CaptionUpdate
+
+```python
+@dataclass(frozen=True)
+class CaptionUpdate:
+    text: str
+    is_final: bool
+    language: str
+    ts_mono: float
+```
+
+- `is_final=True`: texto confirmado (LocalAgreement).
+- Parcial: más discreto en UI; no bloquear el event loop al pintar.
+
+## Streaming
+
+- Política en `src/asr/streaming.py` (LocalAgreement propia).
+- Extensiones futuras: stub `Translator` en `src/asr/translate.py`; `latency_mode` en config (`stable` | `low`).
+
+## Errores
+
+- Fallo CUDA: mensaje accionable (drivers / ctranslate2), no tragar excepciones en silencio en el hilo UI.
+- No añadir dependencias pesadas (torch full, transformers, Marian) sin preguntar.

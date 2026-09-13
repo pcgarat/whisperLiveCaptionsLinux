@@ -1,0 +1,24 @@
+---
+description: Convenciones de documentación en docs/ y tasks/
+globs: docs/**/*.md,tasks/**/*.md
+alwaysApply: false
+---
+
+# Documentación del repo
+
+## docs/
+
+- Nombre: `tema-YYYY-MM-DD.md` (fecha de creación al final).
+- Primera línea del archivo: `Última modificación: YYYY-MM-DD`.
+- Intent vs spec: no mezclar; el spec referencia el intent.
+- Cambios de alcance → actualizar spec **antes** de implementar.
+
+## tasks/
+
+- Plan: `tasks/plan.md`
+- Checklist: `tasks/todo.md`
+- Cada task: acceptance + verify; slices verticales; no tasks XL.
+
+## Idioma
+
+- Docs y commits orientados al autor: español.

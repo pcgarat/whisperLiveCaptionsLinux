@@ -1,0 +1,29 @@
+---
+description: Overlay PyQt6 en GNOME/Wayland — always-on-top, arrastre y geometría
+globs: src/ui/**/*.py
+alwaysApply: false
+---
+
+# Overlay Linux (PyQt6)
+
+## Always-on-top
+
+- Por defecto `QT_QPA_PLATFORM=xcb` (XWayland): `WindowStaysOnTopHint` fiable en GNOME.
+- Wayland nativo suele ignorar el z-order de Qt; no “arreglar” quitando xcb sin alternativa (layer-shell).
+- Tras `setWindowFlags`, **restaurar posición**; el flag recrea la ventana nativa.
+
+## Arrastre
+
+- Preferir `windowHandle().startSystemMove()`; fallback manual con offset.
+- Event filter en panel/labels; botones ⚙/✕ no deben iniciar drag.
+- Clic derecho: menú propio (`Siempre encima`, Ocultar, Configuración, Cerrar).
+
+## Geometría
+
+- Persistir `window_pos` / `window_width` en `config.json` al mover (debounce) y al cerrar.
+- Al abrir: restaurar posición (y reintentos cortos post-`show` por el WM).
+- Si la posición queda fuera de pantallas, reclavar al monitor primario.
+
+## Qt + Cursor AppImage
+
+- Prefijar `PyQt6/Qt6/lib` en `LD_LIBRARY_PATH` (Makefile / `scripts/run.sh`) para no mezclar Qt del sistema.

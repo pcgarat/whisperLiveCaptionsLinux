@@ -1,0 +1,32 @@
+---
+description: Núcleo del proyecto whisperLiveCaptionsLinux — arquitectura, alcance y convenciones
+alwaysApply: true
+---
+
+# Proyecto: subtítulos locales Linux
+
+## Arquitectura (no negociable en fase 1+)
+
+- App **in-process** (arquitectura B): una sola app Python. **No** montar WhisperLive server/cliente.
+- ASR: `faster-whisper` en CUDA. UI: PyQt6 overlay.
+- Audio: monitor PipeWire/Pulse (`*.monitor`), PCM 16 kHz mono **en memoria** (nunca WAV temporales por chunk).
+- Idioma: lo elige el usuario. **Prohibido** auto-detect salvo decisión explícita en un spec nuevo.
+
+## Fuentes de verdad
+
+- Intent: `docs/intent/`
+- Spec: `docs/specs/`
+- Plan/tareas: `tasks/plan.md`, `tasks/todo.md`
+- No reutilizar código de `live_translate_subtitles` (solo look & feel del overlay como referencia visual).
+
+## Fuera de alcance hasta que haya spec
+
+Traducción, multi-idioma real, TensorRT, cloud/API, diarización, Docker obligatorio, extensión de navegador.
+
+## Convenciones
+
+- Responder al usuario en **español**.
+- Commits: Conventional Commits, mensaje en español, sin “Made by Cursor” ni co-author de IDE.
+- Docs en `docs/`: fecha `YYYY-MM-DD` al final del nombre; 1ª línea `Última modificación: YYYY-MM-DD`.
+- Arranque: `make run` (prefija libs PyQt6 + `QT_QPA_PLATFORM=xcb` por defecto).
+- Tests: `make test` / `pytest -q` (sin GPU). Lint: `make lint`.
