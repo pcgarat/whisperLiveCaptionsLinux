@@ -30,6 +30,8 @@ _CONFIG_KEYS = (
     "translation_decode_preset",
     "translation_profiles",
     "second_line_mode",
+    "captions_show_partials",
+    "captions_allow_rewrite",
 )
 
 _TEXT_PREVIEW = 160

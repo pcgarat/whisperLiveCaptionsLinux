@@ -158,6 +158,11 @@ class AppController:
             "translation_decode_preset",
             "translation_profiles",
         )
+        display_keys = (
+            "captions_show_partials",
+            "captions_allow_rewrite",
+            "second_line_mode",
+        )
         asr_restart = any(
             new_cfg.get(k) != self.config.get(k) for k in asr_restart_keys
         )
@@ -178,8 +183,12 @@ class AppController:
 
         if asr_restart:
             self._restart_pipeline_safe()
-        elif translation_only:
-            self._hot_swap_translator()
+        else:
+            if translation_only:
+                self._hot_swap_translator()
+            if self.pipeline is not None:
+                for key in display_keys:
+                    self.pipeline.config[key] = self.config[key]
 
     def shutdown(self) -> None:
         if self._shutting_down:

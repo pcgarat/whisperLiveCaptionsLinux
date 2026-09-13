@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from copy import deepcopy
+from dataclasses import dataclass
 from typing import Any
 
 from PyQt6 import QtCore, QtGui, QtWidgets
@@ -15,6 +16,8 @@ from src.audio.devices import list_audio_monitors
 from src.config import (
     LATENCY_FACTORY_PRESETS,
     SECOND_LINE_MODES,
+    TEXT_ALIGN_LABELS,
+    TEXT_ALIGN_MODES,
     TRANSLATION_FACTORY_PRESETS,
     TRANSLATION_PRESET_LABELS,
     TRANSLATION_RESERVED_PRESET_IDS,
@@ -48,6 +51,69 @@ TOOLTIP_TX_STICKY = (
     "Sticky: no re-traduce prefijos ya enviados a NLLB. "
     "Sticky + parciales: también traduce la hipótesis en vivo (más CPU)."
 )
+TOOLTIP_SHOW_PARTIALS = (
+    "Activado: el overlay muestra la hipótesis del ASR en vivo (texto que aún puede "
+    "cambiar). Desactivado: solo se envía y pinta texto confirmado; más estable, "
+    "pero el subtítulo aparece a saltos al confirmar."
+)
+TOOLTIP_ALLOW_REWRITE = (
+    "Activado: la frase actual puede corregirse in-place si el ASR cambia de "
+    "opinión (mismo prefijo de palabras); una hipótesis totalmente nueva se "
+    "añade al scrollback sin borrar lo anterior. Desactivado: lo escrito solo "
+    "puede crecer. El overlay es un scroll anclado abajo: siempre se ve lo último."
+)
+
+MSG_PARTIALS_STICKY_CONFLICT = (
+    "«Mostrar texto parcial» está desactivado y el modo sticky es "
+    "«Sticky + parciales».\n\n"
+    "Sticky + parciales traduce la hipótesis ASR en vivo; sin texto parcial "
+    "ese modo no tiene efecto.\n\n"
+    "Cancelar deshace el último cambio. El otro botón deja una combinación compatible."
+)
+
+
+@dataclass(frozen=True)
+class SettingsModeConflict:
+    message: str
+    fix_button_label: str
+    # None = no cambiar ese knob al pulsar «compatible».
+    fix_show_partials: bool | None = None
+    fix_sticky_mode: str | None = None
+
+
+def detect_partials_sticky_conflict(
+    *,
+    show_partials: bool,
+    sticky_mode: str,
+    changed: str,
+) -> SettingsModeConflict | None:
+    """Conflicto: sin parciales + sticky=partials.
+
+    `changed`: ``partials`` | ``sticky`` | ``save`` — decide el botón de arreglo
+    (cambiar la *otra* opción) y el mensaje de acción.
+    """
+    sticky = str(sticky_mode or "").strip().lower()
+    if show_partials or sticky != "partials":
+        return None
+    if changed == "partials":
+        return SettingsModeConflict(
+            message=MSG_PARTIALS_STICKY_CONFLICT,
+            fix_button_label="Cambiar sticky a solo confirmados",
+            fix_sticky_mode="committed",
+        )
+    if changed == "sticky":
+        return SettingsModeConflict(
+            message=MSG_PARTIALS_STICKY_CONFLICT,
+            fix_button_label="Activar texto parcial",
+            fix_show_partials=True,
+        )
+    # Guardar u origen desconocido: preferimos conservar «sin parciales».
+    return SettingsModeConflict(
+        message=MSG_PARTIALS_STICKY_CONFLICT,
+        fix_button_label="Cambiar sticky a solo confirmados",
+        fix_sticky_mode="committed",
+    )
+
 
 # Cinema lower-third: carbón profundo + ámbar de marquesina (no GNOME blue genérico).
 _SETTINGS_QSS = """
@@ -423,31 +489,15 @@ class SettingsDialog(QtWidgets.QDialog):
         title.setObjectName("DialogTitle")
         header.addWidget(title)
         subtitle = QtWidgets.QLabel(
-            "Captura, latencia, aspecto y calidad de traducción"
+            "Captura, latencia, apariencia y calidad de traducción"
         )
         subtitle.setObjectName("DialogSubtitle")
         header.addWidget(subtitle)
         root.addLayout(header)
 
-        self._preview_stage = QtWidgets.QFrame()
-        self._preview_stage.setObjectName("PreviewStage")
-        preview_layout = QtWidgets.QVBoxLayout(self._preview_stage)
-        preview_layout.setContentsMargins(16, 14, 16, 16)
-        preview_layout.setSpacing(10)
-        preview_hint = QtWidgets.QLabel("VISTA PREVIA")
-        preview_hint.setObjectName("PreviewHint")
-        preview_layout.addWidget(preview_hint)
-        self._preview_caption = QtWidgets.QLabel(
-            "Hello, this is a live caption preview"
-        )
-        self._preview_caption.setObjectName("PreviewCaption")
-        self._preview_caption.setWordWrap(True)
-        self._preview_caption.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
-        preview_layout.addWidget(self._preview_caption)
-        root.addWidget(self._preview_stage)
-
         tabs = QtWidgets.QTabWidget()
         tabs.addTab(self._build_general_tab(config), "General")
+        tabs.addTab(self._build_appearance_tab(config), "Apariencia")
         tabs.addTab(self._build_translation_tab(config), "Traducciones")
         root.addWidget(tabs, stretch=1)
 
@@ -468,11 +518,96 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._loading_profile = False
         self._loading_tx = False
+        self._guarding_mode_conflict = False
+        self._prev_sticky_mode = str(
+            self.tx_sticky_mode.currentData() or "off"
+        )
+        self.captions_show_partials.toggled.connect(self._on_show_partials_toggled)
+        self.tx_sticky_mode.currentIndexChanged.connect(self._on_sticky_mode_changed)
         self._load_profile_into_sliders(str(self.latency_mode.currentData()))
         self._refresh_translation_preset_combo()
         self._load_translation_decode_into_spins()
         self._sync_translation_preset_actions()
         self._refresh_preview()
+
+    def accept(self) -> None:
+        if not self._ensure_modes_compatible(changed="save"):
+            return
+        super().accept()
+
+    def _on_show_partials_toggled(self, checked: bool) -> None:
+        if self._guarding_mode_conflict:
+            return
+        if checked:
+            return
+        self._ensure_modes_compatible(changed="partials")
+
+    def _on_sticky_mode_changed(self, _index: int) -> None:
+        if self._guarding_mode_conflict:
+            return
+        sticky = str(self.tx_sticky_mode.currentData() or "off")
+        if not self._ensure_modes_compatible(changed="sticky"):
+            return
+        self._prev_sticky_mode = sticky
+
+    def _ensure_modes_compatible(self, *, changed: str) -> bool:
+        conflict = detect_partials_sticky_conflict(
+            show_partials=self.captions_show_partials.isChecked(),
+            sticky_mode=str(self.tx_sticky_mode.currentData() or "off"),
+            changed=changed,
+        )
+        if conflict is None:
+            return True
+        if not self._prompt_mode_conflict(conflict):
+            self._revert_mode_change(changed)
+            return False
+        self._apply_mode_conflict_fix(conflict)
+        return True
+
+    def _prompt_mode_conflict(self, conflict: SettingsModeConflict) -> bool:
+        """True = aplicar arreglo compatible; False = cancelar."""
+        box = QtWidgets.QMessageBox(self)
+        box.setObjectName("SettingsDialog")
+        box.setStyleSheet(_SETTINGS_QSS)
+        box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
+        box.setWindowTitle("Opciones incompatibles")
+        box.setText("Combinación no compatible")
+        box.setInformativeText(conflict.message)
+        cancel_btn = box.addButton(
+            "Cancelar", QtWidgets.QMessageBox.ButtonRole.RejectRole
+        )
+        fix_btn = box.addButton(
+            conflict.fix_button_label,
+            QtWidgets.QMessageBox.ButtonRole.AcceptRole,
+        )
+        box.setDefaultButton(fix_btn)
+        box.exec()
+        clicked = box.clickedButton()
+        return clicked is fix_btn and clicked is not cancel_btn
+
+    def _revert_mode_change(self, changed: str) -> None:
+        self._guarding_mode_conflict = True
+        try:
+            if changed == "partials":
+                self.captions_show_partials.setChecked(True)
+            elif changed == "sticky":
+                idx = self.tx_sticky_mode.findData(self._prev_sticky_mode)
+                self.tx_sticky_mode.setCurrentIndex(idx if idx >= 0 else 0)
+        finally:
+            self._guarding_mode_conflict = False
+
+    def _apply_mode_conflict_fix(self, conflict: SettingsModeConflict) -> None:
+        self._guarding_mode_conflict = True
+        try:
+            if conflict.fix_show_partials is not None:
+                self.captions_show_partials.setChecked(conflict.fix_show_partials)
+            if conflict.fix_sticky_mode is not None:
+                idx = self.tx_sticky_mode.findData(conflict.fix_sticky_mode)
+                if idx >= 0:
+                    self.tx_sticky_mode.setCurrentIndex(idx)
+                    self._prev_sticky_mode = conflict.fix_sticky_mode
+        finally:
+            self._guarding_mode_conflict = False
 
     def _wrap_scroll(self, body: QtWidgets.QWidget) -> QtWidgets.QScrollArea:
         scroll = QtWidgets.QScrollArea()
@@ -606,7 +741,50 @@ class SettingsDialog(QtWidgets.QDialog):
         latency.body.addRow("", note)
         body_layout.addWidget(latency)
 
-        look = _Section("Apariencia")
+        captions = _Section("Subtítulos")
+        self.captions_show_partials = QtWidgets.QCheckBox("Mostrar texto parcial")
+        self.captions_show_partials.setChecked(
+            bool(config.get("captions_show_partials", True))
+        )
+        self.captions_show_partials.setToolTip(TOOLTIP_SHOW_PARTIALS)
+        captions.body.addRow(self.captions_show_partials)
+        self.captions_allow_rewrite = QtWidgets.QCheckBox(
+            "Permitir reescritura de lo ya mostrado"
+        )
+        self.captions_allow_rewrite.setChecked(
+            bool(config.get("captions_allow_rewrite", True))
+        )
+        self.captions_allow_rewrite.setToolTip(TOOLTIP_ALLOW_REWRITE)
+        captions.body.addRow(self.captions_allow_rewrite)
+        body_layout.addWidget(captions)
+        body_layout.addStretch(1)
+        return self._wrap_scroll(body)
+
+    def _build_appearance_tab(self, config: dict[str, Any]) -> QtWidgets.QWidget:
+        body = QtWidgets.QWidget()
+        body.setObjectName("SettingsBody")
+        body_layout = QtWidgets.QVBoxLayout(body)
+        body_layout.setContentsMargins(0, 8, 8, 0)
+        body_layout.setSpacing(18)
+
+        self._preview_stage = QtWidgets.QFrame()
+        self._preview_stage.setObjectName("PreviewStage")
+        preview_layout = QtWidgets.QVBoxLayout(self._preview_stage)
+        preview_layout.setContentsMargins(16, 14, 16, 16)
+        preview_layout.setSpacing(10)
+        preview_hint = QtWidgets.QLabel("VISTA PREVIA")
+        preview_hint.setObjectName("PreviewHint")
+        preview_layout.addWidget(preview_hint)
+        self._preview_caption = QtWidgets.QLabel(
+            "Hello, this is a live caption preview"
+        )
+        self._preview_caption.setObjectName("PreviewCaption")
+        self._preview_caption.setWordWrap(True)
+        self._preview_caption.setAlignment(QtCore.Qt.AlignmentFlag.AlignCenter)
+        preview_layout.addWidget(self._preview_caption)
+        body_layout.addWidget(self._preview_stage)
+
+        look = _Section("Texto y colores")
         self.font_size = QtWidgets.QSpinBox()
         self.font_size.setRange(10, 100)
         self.font_size.setValue(int(config.get("font_size", 28)))
@@ -618,6 +796,18 @@ class SettingsDialog(QtWidgets.QDialog):
         self.padding.setValue(int(config.get("padding", 24)))
         self.padding.valueChanged.connect(self._refresh_preview)
         look.add_row("Padding", self.padding)
+
+        self.text_align = QtWidgets.QComboBox()
+        for mode_key in TEXT_ALIGN_MODES:
+            self.text_align.addItem(TEXT_ALIGN_LABELS[mode_key], mode_key)
+        current_align = str(config.get("text_align", "center"))
+        align_idx = self.text_align.findData(current_align)
+        self.text_align.setCurrentIndex(align_idx if align_idx >= 0 else 0)
+        self.text_align.setToolTip(
+            "Alineación horizontal del subtítulo en el overlay (centro o izquierda)."
+        )
+        self.text_align.currentIndexChanged.connect(self._refresh_preview)
+        look.add_row("Alineación", self.text_align)
 
         self.font_color_btn = QtWidgets.QPushButton()
         self.font_color_btn.setObjectName("ColorSwatch")
@@ -759,6 +949,12 @@ class SettingsDialog(QtWidgets.QDialog):
             """
         )
 
+    def _preview_alignment(self) -> QtCore.Qt.AlignmentFlag:
+        align = str(self.text_align.currentData() or "center")
+        if align == "left":
+            return QtCore.Qt.AlignmentFlag.AlignLeft
+        return QtCore.Qt.AlignmentFlag.AlignHCenter
+
     def _refresh_preview(self) -> None:
         font_size = int(self.font_size.value())
         font_color = self.font_color_btn.text()
@@ -769,6 +965,9 @@ class SettingsDialog(QtWidgets.QDialog):
         bg.setAlphaF(alpha)
         pad = int(self.padding.value())
         rgba = f"rgba({bg.red()}, {bg.green()}, {bg.blue()}, {bg.alphaF():.2f})"
+        self._preview_caption.setAlignment(
+            self._preview_alignment() | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
         self._preview_caption.setStyleSheet(
             f"""
             QLabel#PreviewCaption {{
@@ -1053,9 +1252,12 @@ class SettingsDialog(QtWidgets.QDialog):
                 "latency_profiles": deepcopy(self._profiles()),
                 "font_size": self.font_size.value(),
                 "padding": self.padding.value(),
+                "text_align": str(self.text_align.currentData() or "center"),
                 "font_color": self.font_color_btn.text(),
                 "bg_color": self.bg_color_btn.text(),
                 "bg_alpha": self.alpha.value() / 100.0,
+                "captions_show_partials": self.captions_show_partials.isChecked(),
+                "captions_allow_rewrite": self.captions_allow_rewrite.isChecked(),
                 "second_line_mode": str(
                     self.second_line_mode.currentData() or "live_asr"
                 ),

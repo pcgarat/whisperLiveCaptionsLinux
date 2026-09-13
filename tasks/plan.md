@@ -1,11 +1,9 @@
-# Plan: Fase 2.5 — Modos sticky de traducción
+# Plan: Fase 2.7 — Pestaña Apariencia + alineación
 
-Spec: `docs/specs/fase2.5-traduccion-sticky-modos-2026-09-13.md`  
-**Estado:** implementación completa. Pendiente smoke manual.
+Spec: `docs/specs/fase2.7-apariencia-alineacion-2026-09-13.md`
 
 ## Enfoque
 
-1. **Config:** `translation_sticky_mode` + validación + example. ✅
-2. **Pipeline:** checkpoints + plan sticky; jobs parciales; hot-swap/reset. ✅
-3. **Overlay + Settings:** TX en parciales; combo en Traducciones. ✅
-4. **Tests/docs.** ✅
+1. **Config:** `text_align` default/validate + example.
+2. **Settings:** pestaña Apariencia (mover controles + preview) + combo alineación.
+3. **Overlay + tests:** aplicar alineación; cubrir persistencia.

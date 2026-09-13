@@ -24,6 +24,8 @@
   "translation_target": "es",
   "translation_sticky_mode": "off",
   "second_line_mode": "live_asr",
+  "captions_show_partials": true,
+  "captions_allow_rewrite": true,
   "translator_model": "nllb-200-distilled-ct2",
   "translation_decode_preset": "balanced",
   "translation_profiles": {
@@ -54,6 +56,7 @@
   "bg_color": "#000000",
   "bg_alpha": 0.55,
   "padding": 24,
+  "text_align": "center",
   "window_pos": null,
   "window_width": 900
 }

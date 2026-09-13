@@ -1,17 +1,17 @@
-# Tasks: Fase 2.5 — Modos sticky de traducción
+# Tasks: Fase 2.7 — Pestaña Apariencia + alineación
 
-Spec: `docs/specs/fase2.5-traduccion-sticky-modos-2026-09-13.md`  
+Spec: `docs/specs/fase2.7-apariencia-alineacion-2026-09-13.md`  
 Plan: `tasks/plan.md`
 
 **Estado:** implementación completa (2026-09-13). Pendiente smoke manual.
 
 ---
 
-## Task 1: Config sticky mode
+## Task 1: Config + example
 
 **Acceptance criteria:**
-- [x] Default `off`
-- [x] Valores inválidos → `off`
+- [x] Default `text_align=center`
+- [x] Valores inválidos → `center`
 - [x] Clave en `config.example.json`
 
 **Verification:**
@@ -19,27 +19,24 @@ Plan: `tasks/plan.md`
 
 ---
 
-## Task 2: Pipeline sticky + parciales
+## Task 2: Settings pestaña Apariencia
 
 **Acceptance criteria:**
-- [x] `off` conserva delta/append actual
-- [x] `committed` reutiliza checkpoints en rewrite de cola
-- [x] `partials` traduce display parcial con sticky
-- [x] Hot-swap resetea checkpoints
+- [x] Controles de aspecto fuera de General
+- [x] Combo Centro / Izquierda + preview alineada
+- [x] Persistencia en `result_config`
 
 **Verification:**
-- [x] `pytest -q tests/test_pipeline_translate.py`
+- [x] `pytest -q tests/test_settings_ui.py`
 
 ---
 
-## Task 3: Overlay + Settings
+## Task 3: Overlay + tests
 
 **Acceptance criteria:**
-- [x] Overlay aplica `translated_text` en parciales si seq vigente
-- [x] Combo en pestaña Traducciones; persiste al Guardar
-- [x] `translation_sticky_mode` en hot-swap de app
+- [x] Labels de caption respetan `text_align` en `apply_config`
+- [x] Tests unitarios
 
 **Verification:**
-- [x] `pytest -q tests/test_overlay_captions.py`
-- [x] `make test` (64 passed) + `make lint`
-- [ ] Manual: sticky committed vs partials con habla real ≥5 min
+- [x] `make test` (86 passed) + `make lint`
+- [ ] Manual: Centro↔Izquierda en overlay al Guardar

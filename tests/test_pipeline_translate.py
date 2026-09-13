@@ -261,6 +261,41 @@ def test_emit_committed_shorten_still_emits_and_allows_growth() -> None:
     pipeline.stop()
 
 
+def test_emit_committed_no_rewrite_skips_shrink_and_divergent() -> None:
+    q: queue.Queue = queue.Queue()
+    t = RecordingTranslator()
+    cfg = validate_config(
+        {
+            "translation_enabled": True,
+            "language": "en",
+            "translation_target": "es",
+            "captions_allow_rewrite": False,
+            "device": "cpu",
+        }
+    )
+    pipeline = AsrPipeline(cfg, q, translator=t)
+    pipeline._emit_committed("Hello world", language="en", now=1.0)
+    pipeline.flush_translations()
+    _drain(q)
+    t.calls.clear()
+
+    pipeline._emit_committed("Hello", language="en", now=2.0)
+    pipeline._emit_committed("Hello there", language="en", now=3.0)
+    pipeline.flush_translations()
+    assert t.calls == []
+    assert _drain(q) == []
+
+    pipeline._emit_committed("Hello world today", language="en", now=4.0)
+    pipeline.flush_translations()
+    items = _drain(q)
+    asr = [i for i in items if i.translated_text is None]
+    assert [i.text for i in asr] == ["Hello world today"]
+    assert any(
+        i.translated_text in ("ES:today", "ES:Hello world today") for i in items
+    )
+    pipeline.stop()
+
+
 def test_tx_worker_coalesces_to_latest_span() -> None:
     """Con backlog: emite lo ya traducido y luego el delta hasta lo último."""
     q: queue.Queue = queue.Queue()
@@ -446,6 +481,27 @@ def test_sticky_partials_translates_display() -> None:
     tx = [i for i in _drain(q) if i.translated_text is not None]
     assert tx[0].is_final is False
     assert tx[0].translated_text == "ES:Hello there"
+    pipeline.stop()
+
+
+def test_emit_partial_skipped_when_show_partials_false() -> None:
+    q: queue.Queue = queue.Queue()
+    t = RecordingTranslator()
+    cfg = validate_config(
+        {
+            "translation_enabled": True,
+            "language": "en",
+            "translation_target": "es",
+            "translation_sticky_mode": "partials",
+            "captions_show_partials": False,
+            "device": "cpu",
+        }
+    )
+    pipeline = AsrPipeline(cfg, q, translator=t)
+    pipeline._emit_partial("Hello there", language="en", now=1.0)
+    pipeline.flush_translations()
+    assert t.calls == []
+    assert _drain(q) == []
     pipeline.stop()
 
 

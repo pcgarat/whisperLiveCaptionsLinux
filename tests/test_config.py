@@ -31,6 +31,8 @@ def test_load_missing_returns_defaults(tmp_path: Path) -> None:
     assert cfg["translation_target"] == "es"
     assert cfg["translation_sticky_mode"] == "off"
     assert cfg["second_line_mode"] == "live_asr"
+    assert cfg["captions_show_partials"] is True
+    assert cfg["captions_allow_rewrite"] is True
     assert cfg["installed_languages"] == ["en", "es"]
     assert cfg["translator_model"] == "nllb-200-distilled-ct2"
     assert cfg["translation_decode_preset"] == "balanced"
@@ -49,6 +51,7 @@ def test_validate_clamps_ranges() -> None:
             "font_size": 999,
             "bg_alpha": 2.5,
             "padding": -3,
+            "text_align": "nope",
             "latency_mode": "nope",
             "latency_profiles": {
                 "stable": {
@@ -62,10 +65,25 @@ def test_validate_clamps_ranges() -> None:
     assert cfg["font_size"] == 100
     assert cfg["bg_alpha"] == 1.0
     assert cfg["padding"] == 0
+    assert cfg["text_align"] == "center"
     assert cfg["latency_mode"] == "stable"
     assert cfg["latency_profiles"]["stable"]["agreement_n"] == 5
     assert cfg["latency_profiles"]["stable"]["max_latency_sec"] == 0.5
     assert cfg["latency_profiles"]["stable"]["min_chunk_seconds"] == 0.2
+
+
+def test_window_height_clamps() -> None:
+    assert validate_config({})["window_height"] is None
+    assert validate_config({"window_height": 500})["window_height"] == 500
+    assert validate_config({"window_height": 50})["window_height"] == 120
+    assert validate_config({"window_height": 9999})["window_height"] == 1600
+
+
+def test_text_align_normalize() -> None:
+    assert validate_config({})["text_align"] == "center"
+    assert validate_config({"text_align": "left"})["text_align"] == "left"
+    assert validate_config({"text_align": "LEFT"})["text_align"] == "left"
+    assert validate_config({"text_align": "right"})["text_align"] == "center"
 
 
 def test_migrate_legacy_top_level_into_active_mode() -> None:
@@ -156,6 +174,17 @@ def test_translation_sticky_mode_defaults_and_clamp() -> None:
     assert validate_config({"translation_sticky_mode": "nope"})[
         "translation_sticky_mode"
     ] == "off"
+
+
+def test_captions_display_policy_defaults_and_bool() -> None:
+    assert validate_config({})["captions_show_partials"] is True
+    assert validate_config({})["captions_allow_rewrite"] is True
+    assert validate_config({"captions_show_partials": False})[
+        "captions_show_partials"
+    ] is False
+    assert validate_config({"captions_allow_rewrite": 0})[
+        "captions_allow_rewrite"
+    ] is False
 
 
 def test_installed_languages_includes_active_language() -> None:
