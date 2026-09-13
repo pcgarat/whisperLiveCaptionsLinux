@@ -2,11 +2,19 @@ from __future__ import annotations
 
 import json
 import os
+from collections.abc import Iterable
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
 
 from src.asr.languages import AVAILABLE_LANGUAGES
+from src.asr.translate import DEFAULT_TRANSLATOR_MODEL
+from src.presets import (
+    APP_FACTORY_PRESET_IDS,
+    APP_FACTORY_PRESET_OVERRIDES,
+    APP_PRESET_DEFAULT,
+    is_factory_preset,
+)
 
 LATENCY_FACTORY_PRESETS: dict[str, dict[str, float | int]] = {
     "stable": {"agreement_n": 2, "max_latency_sec": 0.8, "min_chunk_seconds": 0.8},
@@ -14,10 +22,17 @@ LATENCY_FACTORY_PRESETS: dict[str, dict[str, float | int]] = {
 }
 
 # Decoding NLLB (fábrica). `custom` no es fábrica: perfil editable persistente.
+# Los tres perfiles se diferencian solo en `beam_size`, que es el knob de latencia.
+# `length_penalty` 0.7 en todos: medido en RTX 4060, con 1.0 el decoder prefiere
+# hipótesis largas y rellena los fragmentos cortos («oui» → «Sí, sí.», «então» →
+# «Entonces...»); con 0.7 salen limpios sin degradar las frases largas. Es el
+# mínimo que admite el clamp, y 0.4 no mejora de forma apreciable.
+# `no_repeat_ngram_size` 3 también en `fast`: cortar bucles de repetición no
+# cuesta latencia medible y es el peor fallo posible en pantalla.
 TRANSLATION_FACTORY_PRESETS: dict[str, dict[str, float | int]] = {
-    "fast": {"beam_size": 2, "length_penalty": 1.0, "no_repeat_ngram_size": 0},
-    "balanced": {"beam_size": 4, "length_penalty": 1.0, "no_repeat_ngram_size": 3},
-    "quality": {"beam_size": 6, "length_penalty": 1.1, "no_repeat_ngram_size": 3},
+    "fast": {"beam_size": 2, "length_penalty": 0.7, "no_repeat_ngram_size": 3},
+    "balanced": {"beam_size": 4, "length_penalty": 0.7, "no_repeat_ngram_size": 3},
+    "quality": {"beam_size": 6, "length_penalty": 0.7, "no_repeat_ngram_size": 3},
 }
 TRANSLATION_FACTORY_PRESET_IDS = frozenset(TRANSLATION_FACTORY_PRESETS)
 TRANSLATION_RESERVED_PRESET_IDS = TRANSLATION_FACTORY_PRESET_IDS | {"custom"}
@@ -53,9 +68,6 @@ TRANSLATION_STICKY_LABELS: dict[str, str] = {
     "committed": "Sticky (solo confirmados)",
     "partials": "Sticky + parciales",
 }
-
-# Preset general de fábrica (snapshot en config.example.json).
-APP_PRESET_DEFAULT = "default"
 
 # Meta de presets generales: no se anidan dentro de cada snapshot.
 APP_PRESET_META_KEYS = frozenset({"app_preset", "app_presets"})
@@ -97,7 +109,7 @@ def _builtin_defaults() -> dict[str, Any]:
         "second_line_mode": "none",
         "captions_show_partials": False,
         "captions_allow_rewrite": True,
-        "translator_model": "nllb-200-distilled-ct2",
+        "translator_model": DEFAULT_TRANSLATOR_MODEL,
         "translation_decode_preset": "custom",
         "translation_profiles": {
             **deepcopy(TRANSLATION_FACTORY_PRESETS),
@@ -125,11 +137,9 @@ def _builtin_defaults() -> dict[str, Any]:
         "opt_short_caption_beam_cap": True,
         "debug_hud": False,
     }
-    return {
-        **deepcopy(snap),
-        "app_preset": APP_PRESET_DEFAULT,
-        "app_presets": {APP_PRESET_DEFAULT: deepcopy(snap)},
-    }
+    # `app_presets` se puebla por siembra desde el catálogo, no aquí: así los
+    # snapshots no se anidan dentro de DEFAULTS (que es la base de cada snapshot).
+    return {**deepcopy(snap), "app_preset": APP_PRESET_DEFAULT, "app_presets": {}}
 
 
 def resolve_app_root() -> Path | None:
@@ -482,19 +492,61 @@ def slugify_app_preset_name(name: str) -> str:
     return slugify_translation_preset_name(name)
 
 
-def snapshot_app_config(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Copia validada del estado de app sin meta de presets generales."""
+def snapshot_app_config(
+    cfg: dict[str, Any], *, keys: Iterable[str] | None = None
+) -> dict[str, Any]:
+    """Copia validada del estado de app sin meta de presets generales.
+
+    Con `keys` el snapshot es **parcial**: solo esas claves. Al aplicarlo, el
+    resto de la config se queda como está. Es lo que permite que un preset de
+    idioma no arrastre geometría ni apariencia.
+    """
     raw = {
         key: value
         for key, value in dict(cfg).items()
         if key not in APP_PRESET_META_KEYS
     }
     validated = validate_config(raw, _skip_app_presets=True)
+    allowed = None if keys is None else {str(key) for key in keys}
     return {
         key: deepcopy(value)
         for key, value in validated.items()
         if key not in APP_PRESET_META_KEYS
+        and (allowed is None or key in allowed)
     }
+
+
+_FACTORY_APP_PRESETS: dict[str, dict[str, Any]] | None = None
+
+
+def factory_app_presets() -> dict[str, dict[str, Any]]:
+    """Snapshots de fábrica = config de fábrica + overrides del catálogo.
+
+    Se calcula al primer uso (no al importar) porque depende de `DEFAULTS`,
+    que a su vez se lee de `config.example.json`.
+    """
+    global _FACTORY_APP_PRESETS
+    if _FACTORY_APP_PRESETS is None:
+        base = {
+            key: value
+            for key, value in DEFAULTS.items()
+            if key not in APP_PRESET_META_KEYS
+        }
+        # Sin overrides (`default`) el snapshot es completo: restaura todo.
+        # Con overrides es parcial: solo idioma y modelos, para poder cambiar de
+        # preset sin perder geometría, tipografía ni perfiles de latencia.
+        _FACTORY_APP_PRESETS = {
+            preset_id: snapshot_app_config(
+                {**deepcopy(base), **deepcopy(overrides)},
+                keys=overrides.keys() or None,
+            )
+            for preset_id, overrides in APP_FACTORY_PRESET_OVERRIDES.items()
+        }
+    return deepcopy(_FACTORY_APP_PRESETS)
+
+
+def factory_app_preset_ids() -> list[str]:
+    return sorted(APP_FACTORY_PRESET_IDS)
 
 
 def _normalize_app_presets(raw: Any) -> dict[str, dict[str, Any]]:
@@ -510,7 +562,8 @@ def _normalize_app_presets(raw: Any) -> dict[str, dict[str, Any]]:
         if low in seen_lower:
             continue
         seen_lower.add(low)
-        out[name] = snapshot_app_config(blob)
+        # `keys=blob` conserva la parcialidad de los presets que la tengan.
+        out[name] = snapshot_app_config(blob, keys=blob.keys())
     return out
 
 
@@ -537,7 +590,11 @@ def list_app_preset_ids(cfg: dict[str, Any]) -> list[str]:
 
 
 def apply_app_preset(cfg: dict[str, Any], preset_id: str | None) -> dict[str, Any]:
-    """Fusiona un snapshot sobre cfg conservando app_presets. None → solo limpia app_preset."""
+    """Fusiona un snapshot **sobre cfg** conservando app_presets.
+
+    El snapshot gana en las claves que trae; las que no trae (presets parciales)
+    mantienen el valor actual. None → solo limpia app_preset.
+    """
     out = validate_config(deepcopy(cfg))
     presets = deepcopy(out.get("app_presets") or {})
     if not isinstance(presets, dict):
@@ -550,6 +607,7 @@ def apply_app_preset(cfg: dict[str, Any], preset_id: str | None) -> dict[str, An
     if key is None:
         raise ValueError(f"Preset desconocido: {str(preset_id).strip()}")
     merged = {
+        **out,
         **deepcopy(presets[key]),
         "app_presets": presets,
         "app_preset": key,
@@ -602,7 +660,8 @@ def delete_app_preset(
 ) -> dict[str, Any]:
     """Borra un preset de usuario y deja app_preset en null.
 
-    El preset de fábrica (`APP_PRESET_DEFAULT`) no se puede borrar.
+    Los presets de fábrica no se pueden borrar: se resiembran en cada
+    validación, así que borrarlos solo confundiría.
     """
     out = validate_config(deepcopy(cfg))
     presets = deepcopy(out.get("app_presets") or {})
@@ -614,10 +673,8 @@ def delete_app_preset(
     key = _normalize_app_preset_id(requested, presets)
     if key is None:
         raise ValueError(f"Preset desconocido: {str(requested).strip()}")
-    if key == APP_PRESET_DEFAULT:
-        raise ValueError(
-            f"El preset de fábrica «{APP_PRESET_DEFAULT}» no se puede borrar"
-        )
+    if is_factory_preset(key):
+        raise ValueError(f"El preset de fábrica «{key}» no se puede borrar")
     del presets[key]
     out["app_presets"] = presets
     out["app_preset"] = None
@@ -676,8 +733,8 @@ def validate_config(
         str(cfg.get("translation_target") or "es").strip().lower() or "es"
     )
     cfg["translator_model"] = (
-        str(cfg.get("translator_model") or "nllb-200-distilled-ct2").strip()
-        or "nllb-200-distilled-ct2"
+        str(cfg.get("translator_model") or DEFAULT_TRANSLATOR_MODEL).strip()
+        or DEFAULT_TRANSLATOR_MODEL
     )
     cfg["installed_languages"] = _normalize_installed_languages(
         cfg.get("installed_languages"),
@@ -711,7 +768,14 @@ def validate_config(
     presets_raw = (
         raw.get("app_presets") if "app_presets" in raw else cfg.get("app_presets")
     )
-    cfg["app_presets"] = _normalize_app_presets(presets_raw)
+    presets = _normalize_app_presets(presets_raw)
+    # Siembra: los de fábrica que falten (alta nueva o versión que añade presets).
+    # Solo rellena huecos, así que sobrescribir uno con «Guardar» persiste.
+    existing = {key.lower() for key in presets}
+    for preset_id, snapshot in factory_app_presets().items():
+        if preset_id.lower() not in existing:
+            presets[preset_id] = snapshot
+    cfg["app_presets"] = presets
     preset_id_raw = (
         raw.get("app_preset") if "app_preset" in raw else cfg.get("app_preset")
     )

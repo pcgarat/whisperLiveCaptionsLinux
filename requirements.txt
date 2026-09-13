@@ -3,5 +3,8 @@ PyQt6>=6.6.0
 numpy>=1.26.0
 huggingface_hub>=0.23.0
 tokenizers>=0.19.0
+# Tokenización de Opus-MT/Marian. Los .spm de Marian no traen tokenizer.json, así
+# que `tokenizers` no sirve; sentencepiece son 3 MB y no arrastra torch.
+sentencepiece>=0.2.0
 pytest>=8.0.0
 ruff>=0.6.0

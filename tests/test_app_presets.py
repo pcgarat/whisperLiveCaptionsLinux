@@ -13,15 +13,13 @@ from src.config import (
 
 
 def test_app_preset_defaults() -> None:
-    from src.config import APP_PRESET_DEFAULT, DEFAULTS
+    from src.config import APP_PRESET_DEFAULT, DEFAULTS, factory_app_preset_ids
 
     cfg = validate_config({})
-    assert cfg["app_preset"] == APP_PRESET_DEFAULT
+    assert cfg["app_preset"] == DEFAULTS["app_preset"]
     assert APP_PRESET_DEFAULT in cfg["app_presets"]
-    assert set(cfg["app_presets"]) == {APP_PRESET_DEFAULT}
+    assert set(cfg["app_presets"]) == set(factory_app_preset_ids())
     assert cfg["app_presets"][APP_PRESET_DEFAULT]["translation_enabled"] is True
-    assert cfg["app_presets"][APP_PRESET_DEFAULT]["translation_sticky_mode"] == "off"
-    assert cfg["translation_sticky_mode"] == "off"
     assert abs(
         float(cfg["latency_profiles"]["stable"]["max_latency_sec"]) - 0.4
     ) < 1e-9
@@ -97,17 +95,17 @@ def test_save_as_apply_overwrite_delete() -> None:
     assert deleted["language"] == "de"
 
 
-def test_delete_factory_default_rejected() -> None:
-    from src.config import APP_PRESET_DEFAULT
+def test_delete_factory_presets_rejected() -> None:
+    from src.config import factory_app_preset_ids
 
     cfg = validate_config({})
-    assert cfg["app_preset"] == APP_PRESET_DEFAULT
-    try:
-        delete_app_preset(cfg, APP_PRESET_DEFAULT)
-        raise AssertionError("expected factory delete rejected")
-    except ValueError as exc:
-        assert "fábrica" in str(exc).lower()
-    assert APP_PRESET_DEFAULT in validate_config(cfg)["app_presets"]
+    for preset_id in factory_app_preset_ids():
+        try:
+            delete_app_preset(cfg, preset_id)
+            raise AssertionError(f"expected factory delete rejected: {preset_id}")
+        except ValueError as exc:
+            assert "fábrica" in str(exc).lower()
+        assert preset_id in validate_config(cfg)["app_presets"]
 
 
 def test_save_as_rejects_collision() -> None:

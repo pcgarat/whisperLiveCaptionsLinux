@@ -130,22 +130,28 @@ El modo elige el perfil; los knobs editables viven en `latency_profiles[mode]`.
 
 ---
 
-## 4. Parámetros de traducción (NLLB)
+## 4. Parámetros de traducción
 
-Motor: `NllbCt2Translator` (CTranslate2 int8). Alias por defecto: `nllb-200-distilled-ct2` → Hugging Face `JustFrederik/nllb-200-distilled-600M-ct2-int8`.
+Dos motores detrás del mismo protocolo `Translator`:
 
-Hot-swap: cambiar enable/target/sticky/preset/profiles **no** reinicia ASR; solo recrea el `Translator` si cambian enable, modelo o device.
+- **`MarianCt2Translator`** (default, `opus-mt-tc-big`): Opus-MT tc-big en CT2 int8, un
+  modelo por idioma de origen según el registro de `src/asr/opusmt.py`. Los pesos se
+  convierten en la instalación y viven en local, no en la caché de Hugging Face.
+- **`NllbCt2Translator`** (`nllb-200-distilled-ct2` / `-1.3b-ct2`): un solo modelo
+  multilingüe desde Hugging Face. Para idiomas sin `tc-big` hacia español.
+
+Hot-swap: cambiar enable/target/sticky/preset/profiles **no** reinicia ASR; solo recrea el `Translator` si cambia su `translator_fingerprint()` (enable, modelo, device, y el idioma cuando el motor elige modelo por idioma).
 
 ### 4.1 Flags y motor
 
 | Parámetro | Default | Qué hace |
 | --- | --- | --- |
-| `translation_enabled` | `false` | OFF → `NullTranslator` (passthrough). ON → carga NLLB lazy/preload. |
-| `translation_target` | `es` | Idioma destino ISO (`en`, `es`, `fr`, `de`, `it`, `pt`). |
+| `translation_enabled` | `false` | OFF → `NullTranslator` (passthrough). ON → carga el motor lazy/preload. |
+| `translation_target` | `es` | Idioma destino ISO. Opus-MT solo va a `es`; NLLB admite el resto. |
 | `translation_sticky_mode` | `off` | `off` / `committed` / `partials` (ver §1). |
-| `translator_model` | `nllb-200-distilled-ct2` | Repo/alias del modelo CT2. |
+| `translator_model` | `opus-mt-tc-big` | Motor, alias de NLLB o repo CT2 propio. |
 | `device` | mismo que ASR | `cuda` con fallback a CPU int8 si falla la carga. |
-| `compute_type` (NLLB) | `int8` fijo en factory | Independiente del `compute_type` de Whisper. |
+| `compute_type` | Marian `int8_float16`, NLLB `int8` | Independiente del `compute_type` de Whisper. |
 | `second_line_mode` | `live_asr` | Solo UI: `live_asr` / `original` / `none`. |
 
 ### 4.2 Decoding (presets de calidad)
@@ -154,12 +160,14 @@ Valores efectivos vía `effective_translation_decode(config)` según `translatio
 
 | Preset | `beam_size` | `length_penalty` | `no_repeat_ngram_size` | Uso típico |
 | --- | ---: | ---: | ---: | --- |
-| `fast` | 2 | 1.0 | 0 | Menos latencia / CPU |
-| `balanced` | 4 | 1.0 | 3 | Default recomendado |
-| `quality` | 6 | 1.1 | 3 | Mejor calidad, más lento |
+| `fast` | 2 | 0.7 | 3 | Menos latencia / CPU |
+| `balanced` | 4 | 0.7 | 3 | Default recomendado |
+| `quality` | 6 | 0.7 | 3 | Mejor calidad, más lento |
 | `custom` / usuario | editable | editable | editable | Perfil persistente o presets guardados |
 
-Fijo en decode: `max_decoding_length=256`.
+`length_penalty` 0.7 en los tres: medido, con 1.0 el decoder rellena los fragmentos cortos («oui» → «Sí, sí.»). Evitar `beam_size=1` en cualquier motor: es un precipicio de calidad.
+
+Fijo en decode: `max_decoding_length` 96 en Marian, 256 en NLLB. El techo bajo de Marian es una salvaguarda: una línea de subtítulo nunca pasa de 96 tokens y así una alucinación no consume cientos de milisegundos.
 
 ---
 

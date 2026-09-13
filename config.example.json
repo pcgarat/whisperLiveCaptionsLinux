@@ -1,7 +1,7 @@
 {
   "language": "en",
-  "model": "small",
-  "compute_type": "float16",
+  "model": "large-v3-turbo",
+  "compute_type": "int8_float16",
   "device": "cuda",
   "audio_monitor": "",
   "buffer_trimming_sec": 15.0,
@@ -29,31 +29,31 @@
   ],
   "translation_enabled": true,
   "translation_target": "es",
-  "translation_sticky_mode": "off",
+  "translation_sticky_mode": "committed",
   "second_line_mode": "none",
   "captions_show_partials": false,
   "captions_allow_rewrite": true,
-  "translator_model": "nllb-200-distilled-ct2",
-  "translation_decode_preset": "custom",
+  "translator_model": "opus-mt-tc-big",
+  "translation_decode_preset": "balanced",
   "translation_profiles": {
     "fast": {
       "beam_size": 2,
-      "length_penalty": 1.0,
-      "no_repeat_ngram_size": 0
+      "length_penalty": 0.7,
+      "no_repeat_ngram_size": 3
     },
     "balanced": {
       "beam_size": 4,
-      "length_penalty": 1.0,
+      "length_penalty": 0.7,
       "no_repeat_ngram_size": 3
     },
     "quality": {
       "beam_size": 6,
-      "length_penalty": 1.1,
+      "length_penalty": 0.7,
       "no_repeat_ngram_size": 3
     },
     "custom": {
       "beam_size": 4,
-      "length_penalty": 1.0,
+      "length_penalty": 0.7,
       "no_repeat_ngram_size": 3
     }
   },
@@ -81,91 +81,5 @@
   "min_chunk_seconds": 0.8,
   "agreement_n": 1,
   "max_latency_sec": 0.4,
-  "app_preset": "default",
-  "app_presets": {
-    "default": {
-      "language": "en",
-      "model": "small",
-      "compute_type": "float16",
-      "device": "cuda",
-      "audio_monitor": "",
-      "buffer_trimming_sec": 15.0,
-      "use_vad": true,
-      "latency_mode": "stable",
-      "latency_profiles": {
-        "stable": {
-          "agreement_n": 1,
-          "max_latency_sec": 0.4,
-          "min_chunk_seconds": 0.8
-        },
-        "low": {
-          "agreement_n": 1,
-          "max_latency_sec": 1.5,
-          "min_chunk_seconds": 0.35
-        }
-      },
-      "installed_languages": [
-        "en",
-        "es",
-        "fr",
-        "de",
-        "it",
-        "pt"
-      ],
-      "translation_enabled": true,
-      "translation_target": "es",
-      "translation_sticky_mode": "off",
-      "second_line_mode": "none",
-      "captions_show_partials": false,
-      "captions_allow_rewrite": true,
-      "translator_model": "nllb-200-distilled-ct2",
-      "translation_decode_preset": "custom",
-      "translation_profiles": {
-        "fast": {
-          "beam_size": 2,
-          "length_penalty": 1.0,
-          "no_repeat_ngram_size": 0
-        },
-        "balanced": {
-          "beam_size": 4,
-          "length_penalty": 1.0,
-          "no_repeat_ngram_size": 3
-        },
-        "quality": {
-          "beam_size": 6,
-          "length_penalty": 1.1,
-          "no_repeat_ngram_size": 3
-        },
-        "custom": {
-          "beam_size": 4,
-          "length_penalty": 1.0,
-          "no_repeat_ngram_size": 3
-        }
-      },
-      "always_on_top": true,
-      "font_size": 26,
-      "font_color": "#ffffff",
-      "bg_color": "#000000",
-      "bg_alpha": 0.6,
-      "padding": 20,
-      "text_align": "left",
-      "window_pos": null,
-      "window_width": 900,
-      "window_height": 170,
-      "settings_window_pos": null,
-      "settings_window_width": 858,
-      "settings_window_height": 920,
-      "opt_prefer_low_latency": false,
-      "opt_prefer_fast_translation": false,
-      "opt_nllb_on_cpu": false,
-      "opt_tx_delta_only": true,
-      "opt_tx_coalesce_emit": true,
-      "opt_perf_metrics": true,
-      "opt_short_caption_beam_cap": true,
-      "debug_hud": false,
-      "min_chunk_seconds": 0.8,
-      "agreement_n": 1,
-      "max_latency_sec": 0.4
-    }
-  }
+  "app_preset": "video-en-es"
 }

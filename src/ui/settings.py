@@ -11,9 +11,13 @@ from src.asr.languages import (
     AVAILABLE_LANGUAGES,
     language_label,
 )
+from src.asr.translate import (
+    DEFAULT_TRANSLATOR_MODEL,
+    TRANSLATOR_MODEL_IDS,
+    TRANSLATOR_MODEL_LABELS,
+)
 from src.audio.devices import list_audio_monitors
 from src.config import (
-    APP_PRESET_DEFAULT,
     COMPUTE_TYPE_LABELS,
     COMPUTE_TYPES,
     LATENCY_FACTORY_PRESETS,
@@ -34,12 +38,19 @@ from src.config import (
     translation_user_preset_ids,
     validate_config,
 )
+from src.presets import is_factory_preset
 from src.ui.branding import load_brand_logo_pixmap, repo_or_app_root
 
+HINT_TRANSLATOR_MODEL = (
+    "Motor de traducción al español. Opus-MT usa un modelo dedicado por idioma: "
+    "más rápido, menos VRAM y no inventa texto en frases cortas. NLLB es un solo "
+    "modelo para 200 idiomas, útil solo si tu idioma no tiene Opus-MT. "
+    "Cambiarlo recarga solo el traductor."
+)
 HINT_COMPUTE_TYPE = (
     "Precisión de Whisper en GPU. float16 suele ser lo mejor; "
     "int8_float16 libera VRAM con poca pérdida; int8 ahorra más "
-    "(útil si Whisper + NLLB aprietan). Solo afecta al reconocimiento, no a la traducción."
+    "(útil si Whisper + traductor aprietan). Solo afecta al reconocimiento, no a la traducción."
 )
 HINT_LATENCY_MODE = (
     "Estable prioriza texto limpio. Baja latencia responde antes y admite más parpadeo. "
@@ -1083,14 +1094,13 @@ class SettingsDialog(QtWidgets.QDialog):
                 self._config.get("app_presets") or {}
             )
             can_edit = self._controller is not None
-            can_delete = (
-                can_edit and has_active and current != APP_PRESET_DEFAULT
-            )
+            factory = is_factory_preset(current if isinstance(current, str) else None)
+            can_delete = can_edit and has_active and not factory
             self.app_preset_save_btn.setEnabled(can_edit and has_active)
             self.app_preset_delete_btn.setEnabled(can_delete)
-            if current == APP_PRESET_DEFAULT:
+            if factory:
                 self.app_preset_delete_btn.setToolTip(
-                    "El preset de fábrica no se puede borrar"
+                    "Los presets de fábrica no se pueden borrar"
                 )
             else:
                 self.app_preset_delete_btn.setToolTip("Borrar")
@@ -1130,11 +1140,11 @@ class SettingsDialog(QtWidgets.QDialog):
         preset_id = self._config.get("app_preset")
         if not preset_id:
             return
-        if preset_id == APP_PRESET_DEFAULT:
+        if is_factory_preset(str(preset_id)):
             QtWidgets.QMessageBox.information(
                 self,
                 "Borrar preset",
-                f"El preset de fábrica «{APP_PRESET_DEFAULT}» no se puede borrar.",
+                f"El preset de fábrica «{preset_id}» no se puede borrar.",
             )
             return
         box = QtWidgets.QMessageBox(self)
@@ -1212,6 +1222,7 @@ class SettingsDialog(QtWidgets.QDialog):
             sticky_idx = self.tx_sticky_mode.findData(sticky)
             self.tx_sticky_mode.setCurrentIndex(sticky_idx if sticky_idx >= 0 else 0)
             self._prev_sticky_mode = sticky
+            self._refresh_translator_model_combo()
 
             self._refresh_translation_preset_combo()
             self._load_translation_decode_into_spins()
@@ -1612,8 +1623,26 @@ class SettingsDialog(QtWidgets.QDialog):
         body_layout.addStretch(1)
         return self._wrap_scroll(body)
 
+    def _refresh_translator_model_combo(self) -> None:
+        """Sincroniza el combo con la config, conservando un repo propio si lo hay."""
+        current = str(self._config.get("translator_model") or DEFAULT_TRANSLATOR_MODEL)
+        idx = self.translator_model.findData(current)
+        if idx < 0:
+            self.translator_model.addItem(current, current)
+            idx = self.translator_model.findData(current)
+        self.translator_model.setCurrentIndex(idx)
+
     def _build_translation_tab(self, config: dict[str, Any]) -> QtWidgets.QWidget:
         body, body_layout = self._new_tab_body()
+
+        engine = _Section("Motor")
+        self.translator_model = QtWidgets.QComboBox()
+        for alias in TRANSLATOR_MODEL_IDS:
+            self.translator_model.addItem(TRANSLATOR_MODEL_LABELS[alias], alias)
+        self._refresh_translator_model_combo()
+        _size_combo(self.translator_model, "lg")
+        engine.add_row("Traductor", self.translator_model, HINT_TRANSLATOR_MODEL)
+        body_layout.addWidget(engine)
 
         display = _Section("Visualización")
         self.second_line_mode = QtWidgets.QComboBox()
@@ -2098,6 +2127,9 @@ class SettingsDialog(QtWidgets.QDialog):
                 ),
                 "translation_sticky_mode": str(
                     self.tx_sticky_mode.currentData() or "off"
+                ),
+                "translator_model": str(
+                    self.translator_model.currentData() or DEFAULT_TRANSLATOR_MODEL
                 ),
                 "translation_decode_preset": preset,
                 "translation_profiles": deepcopy(self._translation_profiles()),

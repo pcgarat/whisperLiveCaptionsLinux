@@ -1,41 +1,63 @@
-# Tasks: Empaquetado Linux — Fase A
+# Tasks: Fase 2.9 — presets de vídeo por idioma y modelos preinstalados
 
-Spec: `docs/specs/packaging-install-desktop-2026-09-13.md`  
-Rama: `feat/packaging-fase-a-install-desktop`
+Spec: `docs/specs/fase2.9-presets-video-modelos-2026-09-13.md`
 
-## Task 1: Resolución de paths (XDG / app root)
+## Task 1: Medición de modelos en la máquina objetivo
 
-- [x] Helpers `resolve_app_root`, `resolve_config_dir`, `resolve_config_path`, `resolve_example_config_path`
-- [x] `AppController` usa esos helpers (no `Path.cwd()` a ciegas para config)
-- [x] `_shipped_defaults` / example respetan `WLCL_APP_ROOT`
-- [x] Tests unitarios con env + `tmp_path`
-- [x] Verify: `pytest -q tests/test_packaging_paths.py` (+ config)
+- [x] WER por idioma (en/fr/de/pt) con clips FLEURS: `small`, `medium`,
+      `large-v3-turbo` (float16 e int8_float16), `large-v3`
+- [x] VRAM y latencia por ventana (2 s / 5 s / 10 s) de cada combinación
+- [x] NLLB 600M vs 1.3B: VRAM, latencia y calidad sobre frases reales
+- [x] Descartar alternativas (distil-whisper, MADLAD, LLM) con razones
+- [x] Re-medir `float16` vs `int8_float16` con repeticiones: se confirma `int8_float16`
+- [x] Opus-MT tc-big vs NLLB-1.3B en fragmentos cortos → **cambia la decisión**
+- [x] Barrido `beam_size` × `length_penalty` para fijar los perfiles de decode
+- [x] Verify: tablas y conclusiones en el spec §2, §3 y §4bis
 
-## Task 2: Assets packaging + scripts install/uninstall
+## Task 1b: Motor de traducción Opus-MT
 
-- [x] `packaging/whisper-live-captions.desktop.in`
-- [x] `packaging/icons/whisper-live-captions.svg`
-- [x] `scripts/install-user.sh` / `scripts/uninstall-user.sh` (idempotentes, sin sudo)
-- [x] Wrapper generado con PyQt6 env como `run.sh`
-- [x] Verify: smoke install en `HOME` temporal
+- [x] `src/asr/opusmt.py`: registro por idioma, descarga del ZIP y conversión CT2
+- [x] `MarianCt2Translator` con caché por modelo (fr/it/pt comparten `itc-itc`)
+- [x] `sentencepiece` en `requirements.txt` (2,9 MB, sin `torch` ni `transformers`)
+- [x] `translator_fingerprint()`: el idioma cuenta solo si el motor elige por idioma
+- [x] Verify: `pytest -q tests/test_opusmt.py`
 
-## Task 3: Make + README
+## Task 2: Catálogo de presets de fábrica
 
-- [x] Targets `install-user` / `uninstall-user` (`PURGE_CONFIG`)
-- [x] README: sección instalación usuario + nota Fase B planificada
-- [x] Verify: tests paths + `make lint`
+- [x] `src/presets.py` con overrides por idioma (no snapshots duplicados)
+- [x] Snapshot parcial (`snapshot_app_config(keys=...)`)
+- [x] `apply_app_preset` fusiona sobre la config actual
+- [x] Siembra de los que falten en `validate_config`
+- [x] Borrado rechazado para todos los de fábrica (config y UI)
+- [x] Verify: `pytest -q tests/test_video_presets.py tests/test_app_presets.py`
 
-## Task 4: Smoke manual (acceptance)
+## Task 3: Registro de traductores + UI
 
-- [ ] `make install-user` → aparece en menú → arranca
-- [ ] Guardar Settings → relanzar desde menú → persiste (XDG)
-- [ ] `make run` en repo sigue con `config.json` local
-- [ ] `make uninstall-user` quita icono; config XDG permanece
-- [ ] `PURGE_CONFIG=1` borra config
+- [x] Catálogo `TRANSLATOR_MODEL_IDS` / `_LABELS` en `src/asr/translate.py`
+- [x] Alias `nllb-200-distilled-1.3b-ct2`, case-insensitive, repo propio respetado
+- [x] Motor `opus-mt-tc-big` por defecto; NLLB queda como salida multilingüe
+- [x] Selector «Motor» en Settings → Traducciones
+- [x] Verify: `pytest -q tests/test_settings_ui.py tests/test_translate.py`
 
-## Fuera de esta rama (Fase B)
+## Task 4: Precarga de modelos en la instalación
 
-- [ ] `packaging/build-deb.sh` + metadata nfpm/dpkg
-- [ ] Layout `/opt` + `/usr/share/applications`
-- [ ] Release GitHub con `.deb`
-- [ ] Texto licencias NC en paquete
+- [x] `scripts/prefetch-models.py` (derivado del catálogo, `--list`, idempotente)
+- [x] Descarga del ZIP de Marian + conversión a CT2 int8 en la instalación
+- [x] `make prefetch-models`
+- [x] `install-user.sh`: copia el script, lo invoca, no aborta si falla la red
+- [x] `WLCL_SKIP_MODEL_PREFETCH` para saltarla
+- [x] Verify: `--list`, segunda pasada sin descargas, `pytest -q tests/test_packaging_paths.py`
+
+## Task 5: Config de fábrica y docs
+
+- [x] `config.example.json` regenerado, sin `app_presets` duplicados
+- [x] README: presets de vídeo, modelos, precarga y nota para configs existentes
+- [x] Verify: `make check`
+
+## Task 6: Smoke manual (acceptance)
+
+- [ ] Arrancar, elegir `video-en-es`, reproducir vídeo en inglés → subtítulos en español
+- [ ] Cambiar a `video-fr-es` con un vídeo francés sin recolocar el overlay
+- [ ] `video-es` transcribe español sin cargar el traductor (VRAM ~1 GB)
+- [ ] Comprobar VRAM total con navegador reproduciendo vídeo (< 8 GB)
+- [ ] `make install-user` en `HOME` temporal → precarga sin descargas en el 1.er arranque
