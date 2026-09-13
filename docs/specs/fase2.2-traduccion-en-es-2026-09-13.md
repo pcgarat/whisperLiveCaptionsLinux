@@ -103,9 +103,9 @@ La UI:
 
 - Traducir solo el **delta** confirmado respecto a la última base ya traducida, no re-traducir todo el buffer cuando el worker va al día.
 - Emitir el final ASR **antes** de NLLB; la traducción corre en un **worker async** (`tx-worker`).
-- **Coalescing:** si llegan confirmaciones nuevas mientras se traduce, se descarta el resultado intermedio y se traduce el span desde la última base hasta el `committed` más reciente (un solo decode cubre el hueco).
-- La UI aplica ES solo si `seq` sigue en pantalla.
-- Ignorar confirmaciones que **acortan** el texto ya emitido (rewind de LocalAgreement / solape post-trim).
+- **Coalescing:** antes de traducir se salta a lo último pendiente; al terminar un decode **siempre se emite** y se avanza la base, y luego se traduce el delta restante (evita starvation cuando el ASR va más rápido que NLLB).
+- La UI aplica ES si `seq` es el actual, o si es tardío pero el `text` EN coincide con el que aún está en pantalla.
+- Un acortamiento/corrección del committed se emite como replace in-place (nuevo `seq`), no como drop silencioso.
 ## Project Structure (tocar)
 
 ```

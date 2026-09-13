@@ -253,6 +253,7 @@ class AsrPipeline:
             with self._tx_pending_lock:
                 newer = self._tx_pending
                 if newer is not None and newer.seq > job.seq:
+                    # Antes de traducir: saltar a lo último (ahorra decode obsoleto).
                     job = newer
                     self._tx_pending = None
                     continue
@@ -268,6 +269,11 @@ class AsrPipeline:
             if not to_translate:
                 with self._tx_pending_lock:
                     self._last_tx_committed = job.committed
+                    newer = self._tx_pending
+                    if newer is not None and newer.seq > job.seq:
+                        job = newer
+                        self._tx_pending = None
+                        continue
                 return
 
             translation_enabled, target_lang, translator, decode = (
@@ -282,38 +288,51 @@ class AsrPipeline:
                 decode=decode,
             )
 
+            # Importante: SIEMPRE emitir y avanzar la base aunque haya arrived
+            # un job más nuevo durante el decode. Si descartamos el resultado,
+            # con habla continua + NLLB lento el worker entra en starvation y
+            # la línea ES nunca se actualiza (el ASR sí).
             payload: CaptionUpdate | None = None
+            continue_with: _TxJob | None = None
             with self._tx_pending_lock:
-                newer = self._tx_pending
-                if newer is not None and newer.seq > job.seq:
-                    # Coalesce: no emitir ni avanzar base; el siguiente job cubre el hueco.
-                    job = newer
-                    self._tx_pending = None
-                    continue
-
                 if translated is not None:
+                    # Si el ASR ya avanzó pero este committed sigue siendo prefijo,
+                    # etiquetar con el seq actual para que el overlay no la tire.
+                    emit_seq = job.seq
+                    if self._last_committed.startswith(job.committed):
+                        emit_seq = max(emit_seq, self._caption_seq)
                     payload = CaptionUpdate(
                         text=job.committed,
                         is_final=True,
                         language=job.language,
                         ts_mono=time.monotonic(),
                         translated_text=translated,
-                        seq=job.seq,
+                        seq=emit_seq,
                         translation_append=append,
                     )
                 self._last_tx_committed = job.committed
+                newer = self._tx_pending
+                if newer is not None and newer.seq > job.seq:
+                    continue_with = newer
+                    self._tx_pending = None
 
             if payload is not None:
                 self.out_queue.put(payload)
+
+            if continue_with is not None:
+                job = continue_with
+                continue
             return
 
     def _emit_committed(self, committed: str, *, language: str, now: float) -> None:
-        """Emite confirmado al instante; encola traducción async con coalescing."""
-        prev = self._last_committed
-        if prev and prev.startswith(committed) and committed != prev:
-            # Force-commit / solape post-trim que acorta lo ya mostrado: no pisar.
-            return
+        """Emite confirmado al instante; encola traducción async con coalescing.
 
+        Nunca se traga el ASR: un acortamiento del streamer se trata como
+        corrección in-place (replace), no como descarte. Descartar rewinds
+        desincronizaba `_last_committed` del streamer y bloqueaba commits
+        posteriores (síntoma: mucha habla sin salir al overlay).
+        """
+        prev = self._last_committed
         is_extension = bool(prev) and committed.startswith(prev) and committed != prev
         if is_extension:
             delta = committed[len(prev) :].strip()
