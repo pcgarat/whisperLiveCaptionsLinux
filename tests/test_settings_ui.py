@@ -10,8 +10,8 @@ from PyQt6 import QtWidgets
 
 from src.config import TRANSLATION_FACTORY_PRESETS, validate_config
 from src.ui.settings import (
-    TOOLTIP_ALLOW_REWRITE,
-    TOOLTIP_SHOW_PARTIALS,
+    HINT_ALLOW_REWRITE,
+    HINT_SHOW_PARTIALS,
     SettingsDialog,
     _friendly_audio_label,
     detect_partials_sticky_conflict,
@@ -49,11 +49,18 @@ def test_settings_edit_decode_switches_to_custom(qapp: QtWidgets.QApplication) -
         None, validate_config({"translation_decode_preset": "balanced"})
     )
     assert dlg.tx_preset.currentData() == "balanced"
+    assert isinstance(dlg.tx_beam, QtWidgets.QSlider)
+    assert isinstance(dlg.tx_length, QtWidgets.QSlider)
+    assert isinstance(dlg.tx_ngram, QtWidgets.QSlider)
     dlg.tx_beam.setValue(7)
     assert dlg.tx_preset.currentData() == "custom"
     cfg = dlg.result_config()
     assert cfg["translation_decode_preset"] == "custom"
     assert cfg["translation_profiles"]["custom"]["beam_size"] == 7
+    dlg.tx_length.setValue(11)  # 1.1
+    cfg2 = dlg.result_config()
+    assert abs(float(cfg2["translation_profiles"]["custom"]["length_penalty"]) - 1.1) < 1e-9
+    assert dlg.tx_length_value.text() == "1.1"
     dlg.close()
 
 
@@ -67,15 +74,24 @@ def test_settings_factory_preset_in_result(qapp: QtWidgets.QApplication) -> None
         cfg["translation_profiles"]["quality"] == TRANSLATION_FACTORY_PRESETS["quality"]
     )
     assert not dlg.tx_delete_btn.isEnabled()
+    assert not dlg.tx_save_btn.isEnabled()
+    assert dlg.tx_save_as_btn.isEnabled()
     dlg.close()
 
 
 def test_settings_captions_display_toggles(qapp: QtWidgets.QApplication) -> None:
-    dlg = SettingsDialog(None, validate_config({}))
+    dlg = SettingsDialog(
+        None,
+        validate_config(
+            {"captions_show_partials": True, "captions_allow_rewrite": True}
+        ),
+    )
     assert dlg.captions_show_partials.isChecked()
     assert dlg.captions_allow_rewrite.isChecked()
-    assert TOOLTIP_SHOW_PARTIALS in (dlg.captions_show_partials.toolTip() or "")
-    assert TOOLTIP_ALLOW_REWRITE in (dlg.captions_allow_rewrite.toolTip() or "")
+    assert not (dlg.captions_show_partials.toolTip() or "")
+    assert not (dlg.captions_allow_rewrite.toolTip() or "")
+    assert HINT_SHOW_PARTIALS
+    assert HINT_ALLOW_REWRITE
     dlg.captions_show_partials.setChecked(False)
     dlg.captions_allow_rewrite.setChecked(False)
     cfg = dlg.result_config()
@@ -87,16 +103,46 @@ def test_settings_captions_display_toggles(qapp: QtWidgets.QApplication) -> None
 def test_settings_appearance_tab_text_align(qapp: QtWidgets.QApplication) -> None:
     from PyQt6 import QtCore
 
-    dlg = SettingsDialog(None, validate_config({}))
-    assert dlg.text_align.currentData() == "center"
-    idx = dlg.text_align.findData("left")
-    dlg.text_align.setCurrentIndex(idx)
+    dlg = SettingsDialog(None, validate_config({"text_align": "center"}))
+    assert dlg._current_text_align() == "center"
+    dlg._set_text_align("left")
+    dlg._refresh_preview()
     cfg = dlg.result_config()
     assert cfg["text_align"] == "left"
     assert (
         dlg._preview_caption.alignment() & QtCore.Qt.AlignmentFlag.AlignLeft
         == QtCore.Qt.AlignmentFlag.AlignLeft
     )
+    dlg.close()
+
+
+def test_settings_appearance_sliders_and_colors(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    dlg = SettingsDialog(
+        None,
+        validate_config(
+            {
+                "font_size": 32,
+                "padding": 18,
+                "font_color": "#ffcc00",
+                "bg_color": "#112233",
+            }
+        ),
+    )
+    assert isinstance(dlg.font_size, QtWidgets.QSlider)
+    assert isinstance(dlg.padding, QtWidgets.QSlider)
+    assert dlg.font_size.value() == 32
+    assert dlg.padding.value() == 18
+    assert dlg.font_size_value.text() == "32"
+    assert dlg._swatch_hex(dlg.font_color_btn) == "#ffcc00"
+    assert dlg.font_color_hex.text() == "#ffcc00"
+    dlg.font_size.setValue(40)
+    assert dlg.font_size_value.text() == "40"
+    dlg._set_swatch(dlg.bg_color_btn, dlg.bg_color_hex, "#abcdef")
+    cfg = dlg.result_config()
+    assert cfg["font_size"] == 40
+    assert cfg["bg_color"] == "#abcdef"
     dlg.close()
 
 
@@ -136,7 +182,12 @@ def test_settings_conflict_cancel_reverts_partials(
 ) -> None:
     dlg = SettingsDialog(
         None,
-        validate_config({"translation_sticky_mode": "partials"}),
+        validate_config(
+            {
+                "translation_sticky_mode": "partials",
+                "captions_show_partials": True,
+            }
+        ),
     )
     monkeypatch.setattr(dlg, "_prompt_mode_conflict", lambda _c: False)
     dlg.captions_show_partials.setChecked(False)
@@ -150,7 +201,12 @@ def test_settings_conflict_fix_changes_sticky(
 ) -> None:
     dlg = SettingsDialog(
         None,
-        validate_config({"translation_sticky_mode": "partials"}),
+        validate_config(
+            {
+                "translation_sticky_mode": "partials",
+                "captions_show_partials": True,
+            }
+        ),
     )
     monkeypatch.setattr(dlg, "_prompt_mode_conflict", lambda _c: True)
     dlg.captions_show_partials.setChecked(False)
@@ -210,7 +266,10 @@ def test_settings_geometry_snapshot_and_restore(qapp: QtWidgets.QApplication) ->
     assert cfg["settings_window_height"] == 820
     assert cfg["settings_window_pos"] == [30, 40]
 
-    dlg2 = SettingsDialog(None, validate_config({}))
+    dlg2 = SettingsDialog(
+        None,
+        validate_config({"settings_window_pos": None}),
+    )
     dlg2.apply_saved_geometry(fallback_center=QtCore.QPoint(500, 500))
     assert dlg2.x() == 500 - dlg2.width() // 2
     assert dlg2.y() == 500 - dlg2.height() // 2
@@ -224,7 +283,7 @@ class _FakeAppPresetController:
         self.saved = 0
         self.saved_as: list[str] = []
         self.deleted = 0
-        self.cfg = validate_config({})
+        self.cfg = validate_config({"app_preset": None, "app_presets": {}})
 
     def apply_app_preset_from_settings(self, preset_id, settings_dlg):
         self.applied.append(preset_id)
@@ -312,7 +371,7 @@ def test_app_preset_reload_updates_controls(qapp: QtWidgets.QApplication) -> Non
     assert dlg.font_size.value() == 55
     assert dlg.language.currentData() == "es"
     assert dlg.latency_mode.currentData() == "low"
-    assert dlg.text_align.currentData() == "left"
+    assert dlg._current_text_align() == "left"
     assert dlg.width() == 600
     assert dlg.height() == 700
     dlg.close()

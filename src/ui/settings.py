@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from copy import deepcopy
 from dataclasses import dataclass
 from typing import Any
@@ -9,15 +10,12 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 from src.asr.languages import (
     AVAILABLE_LANGUAGES,
     language_label,
-    merge_installed_languages,
-    pending_languages,
 )
 from src.audio.devices import list_audio_monitors
 from src.config import (
     LATENCY_FACTORY_PRESETS,
     SECOND_LINE_MODES,
     TEXT_ALIGN_LABELS,
-    TEXT_ALIGN_MODES,
     TRANSLATION_FACTORY_PRESETS,
     TRANSLATION_PRESET_LABELS,
     TRANSLATION_RESERVED_PRESET_IDS,
@@ -34,42 +32,48 @@ from src.config import (
     validate_config,
 )
 
-TOOLTIP_CONFIDENCE = (
-    "Cuántas hipótesis consecutivas del ASR deben coincidir en un prefijo antes de "
-    "confirmarlo. Más alto = más estable y más lento; más bajo = más rápido e inestable."
+HINT_LATENCY_MODE = (
+    "Estable prioriza texto limpio. Baja latencia responde antes y admite más parpadeo. "
+    "El icono a la derecha restablece confianza y techo del modo elegido."
 )
-TOOLTIP_MAX_LATENCY = (
-    "Techo en segundos: si el subtítulo provisional no se confirma a tiempo, se fuerza "
-    "un commit. Más bajo = menos retraso, más riesgo de confirmar texto prematuro."
+HINT_CONFIDENCE = (
+    "Cuántas lecturas seguidas deben coincidir antes de fijar el texto. "
+    "Más alto = más estable; más bajo = más rápido."
 )
-TOOLTIP_TX_BEAM = (
-    "Beam search del traductor. Más alto = mejor calidad y más CPU/latencia."
+HINT_MAX_LATENCY = (
+    "Si el texto provisional no se fija a tiempo, se fuerza. "
+    "Más bajo = menos espera, más riesgo de adelantar de más. "
+    "El trozo de audio lo marca el modo (Estable ≈ 0,8 s · Baja ≈ 0,35 s) y se aplica "
+    "al guardar sin reiniciar Whisper."
 )
-TOOLTIP_TX_LENGTH = "Penalización de longitud NLLB. ≈1.0 es neutro; algo >1 favorece salidas un poco más largas."
-TOOLTIP_TX_NGRAM = "Evita repetir n-gramas. 0 = desactivado; 3 suele reducir bucles raros en subtítulos."
-TOOLTIP_TX_STICKY = (
-    "Normal: solo confirmados, re-traduce en rewrites. "
-    "Sticky: no re-traduce prefijos ya enviados a NLLB. "
-    "Sticky + parciales: también traduce la hipótesis en vivo (más CPU)."
+HINT_SHOW_PARTIALS = (
+    "Muestra la hipótesis en vivo mientras aún puede cambiar. "
+    "Si lo apagas, el cartón solo avanza al confirmar."
 )
-TOOLTIP_SHOW_PARTIALS = (
-    "Activado: el overlay muestra la hipótesis del ASR en vivo (texto que aún puede "
-    "cambiar). Desactivado: solo se envía y pinta texto confirmado; más estable, "
-    "pero el subtítulo aparece a saltos al confirmar."
+HINT_ALLOW_REWRITE = (
+    "Permite corregir la frase actual si Whisper cambia de opinión. "
+    "Si lo apagas, el texto solo puede alargarse."
 )
-TOOLTIP_ALLOW_REWRITE = (
-    "Activado: la frase actual puede corregirse in-place si el ASR cambia de "
-    "opinión (mismo prefijo de palabras); una hipótesis totalmente nueva se "
-    "añade al scrollback sin borrar lo anterior. Desactivado: lo escrito solo "
-    "puede crecer. El overlay es un scroll anclado abajo: siempre se ve lo último."
+HINT_SECOND_LINE = (
+    "Con traducción activa: línea 1 = traducción; línea 2 según este selector. "
+    "Sin traducción: una sola línea de reconocimiento."
+)
+HINT_TX_STICKY = (
+    "Normal traduce solo lo confirmado. Sticky reutiliza tramos ya traducidos. "
+    "Sticky + parciales adelanta la traducción de la hipótesis en vivo."
+)
+HINT_TX_BEAM = "Amplitud de búsqueda (1–8). Más alto = mejor frase, más carga."
+HINT_TX_LENGTH = (
+    "Empuja la longitud de la traducción (0,6–1,5). Cerca de 1,0 es neutro."
+)
+HINT_TX_NGRAM = (
+    "Evita bucles de palabras (0–5). 0 lo desactiva; 3 suele bastar en subtítulos."
 )
 
 MSG_PARTIALS_STICKY_CONFLICT = (
-    "«Mostrar texto parcial» está desactivado y el modo sticky es "
-    "«Sticky + parciales».\n\n"
-    "Sticky + parciales traduce la hipótesis ASR en vivo; sin texto parcial "
-    "ese modo no tiene efecto.\n\n"
-    "Cancelar deshace el último cambio. El otro botón deja una combinación compatible."
+    "Tienes el texto parcial apagado y el modo Sticky + parciales.\n\n"
+    "Ese modo necesita ver la hipótesis en vivo; sin parciales no hace nada.\n\n"
+    "Cancelar deshace el último cambio. El otro botón deja una combinación usable."
 )
 
 
@@ -99,7 +103,7 @@ def detect_partials_sticky_conflict(
     if changed == "partials":
         return SettingsModeConflict(
             message=MSG_PARTIALS_STICKY_CONFLICT,
-            fix_button_label="Cambiar sticky a solo confirmados",
+            fix_button_label="Pasar sticky a solo confirmados",
             fix_sticky_mode="committed",
         )
     if changed == "sticky":
@@ -111,7 +115,7 @@ def detect_partials_sticky_conflict(
     # Guardar u origen desconocido: preferimos conservar «sin parciales».
     return SettingsModeConflict(
         message=MSG_PARTIALS_STICKY_CONFLICT,
-        fix_button_label="Cambiar sticky a solo confirmados",
+        fix_button_label="Pasar sticky a solo confirmados",
         fix_sticky_mode="committed",
     )
 
@@ -138,6 +142,16 @@ QLabel#DialogTitle {
 QLabel#DialogSubtitle {
     color: #8b93a7;
     font-size: 12px;
+}
+QToolTip {
+    background-color: #1c1f27;
+    color: #f4f5f7;
+    border: 1px solid #e8b86d;
+    border-radius: 6px;
+    padding: 6px 10px;
+    font-size: 12px;
+    font-weight: 500;
+    letter-spacing: 0.2px;
 }
 QFrame#PreviewStage {
     background: qlineargradient(
@@ -174,6 +188,7 @@ QLabel#FieldLabel {
 QLabel#FieldHint {
     color: #7a8296;
     font-size: 11px;
+    min-height: 0;
 }
 QLabel#ValueChip {
     color: #e8b86d;
@@ -185,9 +200,11 @@ QComboBox, QSpinBox, QDoubleSpinBox {
     background: #22262f;
     color: #eef0f4;
     border: 1px solid #3a4152;
-    border-radius: 8px;
-    padding: 7px 10px;
-    min-height: 18px;
+    border-radius: 6px;
+    padding: 0px 8px;
+    min-height: 32px;
+    max-height: 32px;
+    font-size: 12px;
 }
 QComboBox:hover, QSpinBox:hover, QDoubleSpinBox:hover {
     border-color: #5a6478;
@@ -227,8 +244,11 @@ QPushButton#SecondaryButton {
     background: #22262f;
     color: #d5dae6;
     border: 1px solid #3a4152;
-    border-radius: 8px;
-    padding: 7px 12px;
+    border-radius: 6px;
+    padding: 0px 10px;
+    min-height: 32px;
+    max-height: 32px;
+    font-size: 12px;
 }
 QPushButton#SecondaryButton:hover {
     background: #2a303c;
@@ -247,25 +267,67 @@ QPushButton#GhostButton:hover {
     border-color: #3a4152;
 }
 QPushButton#ColorSwatch {
+    min-width: 32px;
+    max-width: 32px;
+    min-height: 32px;
+    max-height: 32px;
     border: 1px solid #4a5164;
-    border-radius: 8px;
-    padding: 8px 12px;
-    text-align: left;
-    font-family: "JetBrains Mono", "Cascadia Code", "Ubuntu Mono", monospace;
-    font-size: 12px;
+    border-radius: 6px;
+    padding: 0;
 }
 QPushButton#ColorSwatch:hover {
     border-color: #e8b86d;
+}
+QPushButton#AlignToggle {
+    min-width: 32px;
+    max-width: 32px;
+    min-height: 32px;
+    max-height: 32px;
+    border: 1px solid #3a4152;
+    border-radius: 6px;
+    background: #22262f;
+    padding: 0;
+}
+QPushButton#AlignToggle:hover {
+    border-color: #5a6478;
+}
+QPushButton#AlignToggle:checked {
+    border-color: #e8b86d;
+    background: #2a2620;
+}
+QPushButton#IconToolButton {
+    /* Tamaño vía setFixedSize: min/max en QSS + border hinchan el widget y
+       roban el spacing del QHBoxLayout (selector pegado al 1.er botón). */
+    border: 1px solid #3a4152;
+    border-radius: 6px;
+    background: #22262f;
+    padding: 0;
+}
+QPushButton#IconToolButton:hover {
+    border-color: #e8b86d;
+}
+QPushButton#IconToolButton:disabled {
+    background: #1a1d24;
+    border-color: #2a2f3a;
+}
+QLabel#ColorHex {
+    color: #e8b86d;
+    font-size: 12px;
+    font-weight: 600;
+    font-family: "JetBrains Mono", "Cascadia Code", "Ubuntu Mono", monospace;
+    min-width: 72px;
 }
 QPushButton#PrimaryButton {
     background: #e8b86d;
     color: #1a140c;
     border: none;
-    border-radius: 8px;
-    padding: 8px 16px;
+    border-radius: 6px;
+    padding: 0px 16px;
     min-width: 96px;
     min-height: 32px;
+    max-height: 32px;
     font-weight: 600;
+    font-size: 12px;
 }
 QPushButton#PrimaryButton:hover {
     background: #f0c784;
@@ -274,29 +336,16 @@ QPushButton#DialogCancel {
     background: #22262f;
     color: #d5dae6;
     border: 1px solid #3a4152;
-    border-radius: 8px;
-    padding: 8px 16px;
+    border-radius: 6px;
+    padding: 0px 16px;
     min-width: 96px;
     min-height: 32px;
+    max-height: 32px;
+    font-size: 12px;
 }
 QPushButton#DialogCancel:hover {
     background: #2a303c;
     border-color: #5a6478;
-}
-QCheckBox {
-    color: #e8eaef;
-    spacing: 8px;
-}
-QCheckBox::indicator {
-    width: 16px;
-    height: 16px;
-    border-radius: 4px;
-    border: 1px solid #3a4152;
-    background: #22262f;
-}
-QCheckBox::indicator:checked {
-    background: #e8b86d;
-    border-color: #e8b86d;
 }
 QTabWidget::pane {
     border: 1px solid #2c3140;
@@ -325,6 +374,116 @@ QTabBar::tab:hover:!selected {
 """
 
 
+CONTROL_HEIGHT = 32
+CONTROL_WIDTH = {
+    "sm": 140,
+    "md": 240,
+    "lg": 360,
+}
+# Espacio uniforme: selector↔botones y botones↔botones.
+CONTROL_ACTION_GAP = 6
+# Columna de control: selector lg + hasta 3 botones icono (presets).
+CONTROL_SLOT_WIDTH = (
+    CONTROL_WIDTH["lg"] + 3 * CONTROL_HEIGHT + 3 * CONTROL_ACTION_GAP
+)
+
+
+def _set_control_height(widget: QtWidgets.QWidget) -> None:
+    widget.setFixedHeight(CONTROL_HEIGHT)
+
+
+def _set_control_width(widget: QtWidgets.QWidget, size: str) -> None:
+    widget.setFixedWidth(CONTROL_WIDTH[size])
+
+
+def _pad_button_icon_gap(
+    button: QtWidgets.QPushButton, gap_px: int = 8
+) -> None:
+    """Añade margen transparente a la derecha del icono (hueco icono→texto)."""
+    icon = button.icon()
+    if icon.isNull():
+        return
+    size = button.iconSize()
+    if size.width() <= 0 or size.height() <= 0:
+        size = QtCore.QSize(16, 16)
+    src = icon.pixmap(size)
+    if src.isNull():
+        return
+    out = QtGui.QPixmap(src.width() + gap_px, max(src.height(), size.height()))
+    out.fill(QtCore.Qt.GlobalColor.transparent)
+    painter = QtGui.QPainter(out)
+    y = (out.height() - src.height()) // 2
+    painter.drawPixmap(0, y, src)
+    painter.end()
+    button.setIcon(QtGui.QIcon(out))
+    button.setIconSize(QtCore.QSize(size.width() + gap_px, size.height()))
+
+
+def _size_combo(combo: QtWidgets.QComboBox, size: str) -> QtWidgets.QComboBox:
+    _set_control_width(combo, size)
+    _set_control_height(combo)
+    return combo
+
+
+def _combo_actions_row(
+    combo: QtWidgets.QComboBox,
+    *buttons: QtWidgets.QWidget,
+) -> QtWidgets.QWidget:
+    """Selector + botones a la derecha con el mismo margen entre todos."""
+    wrap = QtWidgets.QWidget()
+    row = QtWidgets.QHBoxLayout(wrap)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(CONTROL_ACTION_GAP)
+    row.addWidget(combo, stretch=0)
+    for button in buttons:
+        row.addWidget(button, stretch=0)
+    # Ancho por tamaños reales (no asumir CONTROL_HEIGHT): si el wrap queda
+    # corto, Qt comprime el spacing y el selector queda pegado al 1.er botón.
+    combo_w = max(combo.minimumWidth(), combo.width())
+    buttons_w = sum(
+        max(btn.minimumWidth(), btn.width(), CONTROL_HEIGHT) for btn in buttons
+    )
+    width = combo_w + buttons_w + len(buttons) * CONTROL_ACTION_GAP
+    wrap.setFixedWidth(width)
+    wrap.setSizePolicy(
+        QtWidgets.QSizePolicy.Policy.Fixed,
+        QtWidgets.QSizePolicy.Policy.Preferred,
+    )
+    return wrap
+
+
+def _control_slot(widget: QtWidgets.QWidget) -> QtWidgets.QWidget:
+    """Hueco de ancho fijo: el control define la altura (sin recortar)."""
+    slot = QtWidgets.QWidget()
+    slot.setFixedWidth(CONTROL_SLOT_WIDTH)
+    slot.setSizePolicy(
+        QtWidgets.QSizePolicy.Policy.Fixed,
+        QtWidgets.QSizePolicy.Policy.Preferred,
+    )
+    layout = QtWidgets.QHBoxLayout(slot)
+    layout.setContentsMargins(0, 0, 0, 0)
+    layout.setSpacing(0)
+    layout.addWidget(
+        widget,
+        stretch=0,
+        alignment=QtCore.Qt.AlignmentFlag.AlignLeft
+        | QtCore.Qt.AlignmentFlag.AlignVCenter,
+    )
+    layout.addStretch(1)
+    return slot
+
+
+def _field_label(text: str) -> QtWidgets.QLabel:
+    """Etiqueta centrada verticalmente con el control (misma altura)."""
+    lab = QtWidgets.QLabel(text)
+    lab.setObjectName("FieldLabel")
+    lab.setAlignment(
+        QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+    )
+    lab.setFixedHeight(CONTROL_HEIGHT)
+    return lab
+
+
 def _friendly_audio_label(device: str) -> str:
     """Etiqueta legible sin perder el id técnico en el tooltip."""
     name = device.strip()
@@ -345,79 +504,227 @@ def _friendly_audio_label(device: str) -> str:
     return short
 
 
-def _contrast_text(bg: QtGui.QColor) -> str:
-    # YIQ aproximado: texto oscuro sobre swatches claros.
-    yiq = (bg.red() * 299 + bg.green() * 587 + bg.blue() * 114) / 1000
-    return "#1a140c" if yiq > 150 else "#f4f5f7"
+def _alignment_icon(mode: str, *, size: int = 20, color: str = "#c5cad6") -> QtGui.QIcon:
+    pm = QtGui.QPixmap(size, size)
+    pm.fill(QtCore.Qt.GlobalColor.transparent)
+    painter = QtGui.QPainter(pm)
+    painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+    pen = QtGui.QPen(QtGui.QColor(color))
+    pen.setWidthF(2.0)
+    pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    ys = (5, 10, 15)
+    if mode == "left":
+        spans = ((4, 16), (4, 13), (4, 16))
+    else:
+        spans = ((5, 15), (6, 14), (5, 15))
+    for y, (x1, x2) in zip(ys, spans, strict=True):
+        painter.drawLine(x1, y, x2, y)
+    painter.end()
+    return QtGui.QIcon(pm)
 
 
-class InstallLanguagesDialog(QtWidgets.QDialog):
-    def __init__(
-        self,
-        parent: QtWidgets.QWidget | None,
-        installed: list[str],
-    ) -> None:
+def _preset_action_icon(
+    kind: str, *, size: int = 18, color: str = "#c5cad6"
+) -> QtGui.QIcon:
+    """Iconos: save | save_as | delete | reset."""
+    pm = QtGui.QPixmap(size, size)
+    pm.fill(QtCore.Qt.GlobalColor.transparent)
+    painter = QtGui.QPainter(pm)
+    painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+    pen = QtGui.QPen(QtGui.QColor(color))
+    pen.setWidthF(1.6)
+    pen.setJoinStyle(QtCore.Qt.PenJoinStyle.RoundJoin)
+    pen.setCapStyle(QtCore.Qt.PenCapStyle.RoundCap)
+    painter.setPen(pen)
+    painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+
+    if kind in {"save", "save_as"}:
+        painter.drawRoundedRect(3, 2, 12, 14, 1.5, 1.5)
+        painter.drawRect(6, 2, 6, 4)
+        painter.drawLine(6, 12, 12, 12)
+        if kind == "save_as":
+            painter.drawLine(14, 4, 14, 8)
+            painter.drawLine(12, 6, 16, 6)
+    elif kind == "reset":
+        # Arco con flecha (restablecer).
+        rect = QtCore.QRectF(3.5, 3.5, 11, 11)
+        painter.drawArc(rect, 40 * 16, 280 * 16)
+        painter.drawLine(13, 4, 15, 6)
+        painter.drawLine(13, 4, 11, 6)
+    else:
+        painter.drawLine(5, 5, 13, 5)
+        painter.drawLine(7, 5, 7, 3)
+        painter.drawLine(11, 5, 11, 3)
+        painter.drawLine(6, 3, 12, 3)
+        painter.drawRoundedRect(5, 5, 8, 10, 1.2, 1.2)
+        painter.drawLine(8, 7, 8, 12)
+        painter.drawLine(10, 7, 10, 12)
+
+    painter.end()
+    return QtGui.QIcon(pm)
+
+
+def _make_icon_tool_button(*, name: str, icon_kind: str) -> QtWidgets.QPushButton:
+    btn = QtWidgets.QPushButton()
+    btn.setObjectName("IconToolButton")
+    btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+    btn.setAccessibleName(name)
+    btn.setToolTip(name)
+    btn.setIcon(_preset_action_icon(icon_kind))
+    btn.setIconSize(QtCore.QSize(16, 16))
+    btn.setFixedSize(CONTROL_HEIGHT, CONTROL_HEIGHT)
+    btn.setFocusPolicy(QtCore.Qt.FocusPolicy.NoFocus)
+    return btn
+
+
+class MarqueeToggle(QtWidgets.QAbstractButton):
+    """Interruptor carbón/ámbar alineado con el look cinema del Settings."""
+
+    _TRACK_W = 32
+    _TRACK_H = 18
+    _KNOB = 14
+    _GAP = 8
+
+    def __init__(self, text: str = "", parent: QtWidgets.QWidget | None = None) -> None:
         super().__init__(parent)
-        self.setObjectName("SettingsDialog")
-        self.setWindowTitle("Instalar idiomas")
-        self.setModal(True)
-        self.setStyleSheet(_SETTINGS_QSS)
-        self._installed = list(installed)
-        self._checks: dict[str, QtWidgets.QCheckBox] = {}
+        self.setCheckable(True)
+        self.setText(text)
+        self.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.setFocusPolicy(QtCore.Qt.FocusPolicy.StrongFocus)
+        self.setMouseTracking(True)
+        font = self.font()
+        font.setPointSize(12)
+        self.setFont(font)
 
-        layout = QtWidgets.QVBoxLayout(self)
-        layout.setContentsMargins(20, 18, 20, 16)
-        layout.setSpacing(12)
+    def sizeHint(self) -> QtCore.QSize:
+        fm = QtGui.QFontMetrics(self.font())
+        label_w = fm.horizontalAdvance(self.text()) if self.text() else 0
+        width = self._TRACK_W + (self._GAP + label_w if label_w else 0)
+        height = max(22, self._TRACK_H, fm.height())
+        return QtCore.QSize(width, height)
 
-        title = QtWidgets.QLabel("Añadir idiomas")
-        title.setObjectName("DialogTitle")
-        layout.addWidget(title)
-        subtitle = QtWidgets.QLabel(
-            "Se añadirá a los selectores de Settings y del overlay."
-        )
-        subtitle.setObjectName("DialogSubtitle")
-        subtitle.setWordWrap(True)
-        layout.addWidget(subtitle)
+    def minimumSizeHint(self) -> QtCore.QSize:
+        return self.sizeHint()
 
-        pending = pending_languages(self._installed)
-        if not pending:
-            empty = QtWidgets.QLabel(
-                "Todos los idiomas del catálogo ya están instalados."
-            )
-            empty.setObjectName("FieldHint")
-            empty.setWordWrap(True)
-            layout.addWidget(empty)
+    def enterEvent(self, event: QtGui.QEnterEvent) -> None:
+        self.update()
+        super().enterEvent(event)
+
+    def leaveEvent(self, event: QtCore.QEvent) -> None:
+        self.update()
+        super().leaveEvent(event)
+
+    def paintEvent(self, event: QtGui.QPaintEvent) -> None:
+        del event
+        painter = QtGui.QPainter(self)
+        painter.setRenderHint(QtGui.QPainter.RenderHint.Antialiasing)
+
+        on = self.isChecked()
+        hovered = self.underMouse() and self.isEnabled()
+        disabled = not self.isEnabled()
+
+        if on:
+            track = QtGui.QColor("#e8b86d")
+            border = QtGui.QColor("#f0c784" if hovered else "#e8b86d")
+            knob = QtGui.QColor("#1a140c")
         else:
-            for code in pending:
-                box = QtWidgets.QCheckBox(language_label(code))
-                self._checks[code] = box
-                layout.addWidget(box)
+            track = QtGui.QColor("#22262f")
+            border = QtGui.QColor("#5a6478" if hovered else "#3a4152")
+            knob = QtGui.QColor("#c5cad6")
 
-        catalog = QtWidgets.QLabel(
-            "Catálogo: "
-            + ", ".join(f"{AVAILABLE_LANGUAGES[c]} ({c})" for c in AVAILABLE_LANGUAGES)
-        )
-        catalog.setObjectName("FieldHint")
-        catalog.setWordWrap(True)
-        layout.addWidget(catalog)
+        if disabled:
+            track.setAlpha(120)
+            border.setAlpha(100)
+            knob.setAlpha(120)
 
-        buttons = QtWidgets.QDialogButtonBox()
-        self.install_btn = buttons.addButton(
-            "Instalar seleccionados",
-            QtWidgets.QDialogButtonBox.ButtonRole.AcceptRole,
-        )
-        cancel = buttons.addButton(QtWidgets.QDialogButtonBox.StandardButton.Cancel)
-        self.install_btn.setObjectName("PrimaryButton")
-        if cancel is not None:
-            cancel.setText("Cancelar")
-            cancel.setObjectName("DialogCancel")
-        self.install_btn.setEnabled(bool(pending))
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
+        y = (self.height() - self._TRACK_H) / 2
+        track_rect = QtCore.QRectF(0, y, self._TRACK_W, self._TRACK_H)
+        painter.setPen(QtGui.QPen(border, 1.2))
+        painter.setBrush(track)
+        painter.drawRoundedRect(track_rect, self._TRACK_H / 2, self._TRACK_H / 2)
 
-    def selected_codes(self) -> list[str]:
-        return [code for code, box in self._checks.items() if box.isChecked()]
+        margin = (self._TRACK_H - self._KNOB) / 2
+        if on:
+            knob_x = self._TRACK_W - margin - self._KNOB
+        else:
+            knob_x = margin
+        knob_rect = QtCore.QRectF(knob_x, y + margin, self._KNOB, self._KNOB)
+        painter.setPen(QtCore.Qt.PenStyle.NoPen)
+        painter.setBrush(knob)
+        painter.drawEllipse(knob_rect)
+
+        if self.text():
+            text_color = QtGui.QColor("#6d758a" if disabled else "#e8eaef")
+            painter.setPen(text_color)
+            text_rect = QtCore.QRectF(
+                self._TRACK_W + self._GAP,
+                0,
+                self.width() - self._TRACK_W - self._GAP,
+                self.height(),
+            )
+            painter.drawText(
+                text_rect,
+                int(
+                    QtCore.Qt.AlignmentFlag.AlignVCenter
+                    | QtCore.Qt.AlignmentFlag.AlignLeft
+                ),
+                self.text(),
+            )
+
+        if self.hasFocus():
+            focus = QtGui.QPen(QtGui.QColor("#e8b86d"))
+            focus.setWidthF(1.0)
+            focus.setStyle(QtCore.Qt.PenStyle.DotLine)
+            painter.setPen(focus)
+            painter.setBrush(QtCore.Qt.BrushStyle.NoBrush)
+            painter.drawRoundedRect(
+                track_rect.adjusted(-2, -2, 2, 2),
+                self._TRACK_H / 2 + 1,
+                self._TRACK_H / 2 + 1,
+            )
+
+
+def _int_slider_row(
+    *,
+    low: int,
+    high: int,
+    value: int,
+    suffix: str = "",
+    format_value: Callable[[int], str] | None = None,
+    chip_min_width: int = 36,
+    width: str = "lg",
+) -> tuple[QtWidgets.QWidget, QtWidgets.QSlider, QtWidgets.QLabel]:
+    wrap = QtWidgets.QWidget()
+    row = QtWidgets.QHBoxLayout(wrap)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(8)
+    row.setAlignment(QtCore.Qt.AlignmentFlag.AlignVCenter)
+    slider = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
+    slider.setRange(low, high)
+    slider.setValue(value)
+    _set_control_height(slider)
+    text = format_value(value) if format_value else f"{value}{suffix}"
+    chip = QtWidgets.QLabel(text)
+    chip.setObjectName("ValueChip")
+    chip.setAlignment(
+        QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+    )
+    chip.setMinimumWidth(chip_min_width)
+    chip.setFixedHeight(CONTROL_HEIGHT)
+    row.addWidget(
+        slider,
+        stretch=1,
+        alignment=QtCore.Qt.AlignmentFlag.AlignVCenter,
+    )
+    row.addWidget(
+        chip,
+        stretch=0,
+        alignment=QtCore.Qt.AlignmentFlag.AlignVCenter,
+    )
+    _set_control_width(wrap, width)
+    wrap.setFixedHeight(CONTROL_HEIGHT)
+    return wrap, slider, chip
 
 
 class _Section(QtWidgets.QWidget):
@@ -425,7 +732,7 @@ class _Section(QtWidgets.QWidget):
         super().__init__(parent)
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(0, 4, 0, 4)
-        root.setSpacing(10)
+        root.setSpacing(14)
 
         header = QtWidgets.QHBoxLayout()
         header.setSpacing(10)
@@ -439,11 +746,13 @@ class _Section(QtWidgets.QWidget):
         root.addLayout(header)
 
         self.body = QtWidgets.QFormLayout()
-        self.body.setContentsMargins(0, 0, 0, 0)
+        self.body.setContentsMargins(0, 6, 0, 0)
         self.body.setHorizontalSpacing(16)
-        self.body.setVerticalSpacing(10)
+        self.body.setVerticalSpacing(12)
+        # AlignTop: la etiqueta (altura = control) queda a la altura del selector,
+        # no centrada respecto al hint multilínea de la derecha.
         self.body.setLabelAlignment(
-            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignTop
         )
         self.body.setFormAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
         self.body.setFieldGrowthPolicy(
@@ -452,14 +761,96 @@ class _Section(QtWidgets.QWidget):
         root.addLayout(self.body)
 
     def add_row(
-        self, label: str, widget: QtWidgets.QWidget, tip: str | None = None
+        self,
+        label: str,
+        widget: QtWidgets.QWidget,
+        hint: str | None = None,
     ) -> None:
-        lab = QtWidgets.QLabel(label)
-        lab.setObjectName("FieldLabel")
-        if tip:
-            lab.setToolTip(tip)
-            widget.setToolTip(tip)
-        self.body.addRow(lab, widget)
+        self.body.addRow(_field_label(label), _with_side_hint(widget, hint))
+
+    def add_hint(self, text: str) -> None:
+        """Texto al mismo ancho que el selector lg (p. ej. bajo el preset general)."""
+        hint = QtWidgets.QLabel(text)
+        hint.setObjectName("FieldHint")
+        hint.setWordWrap(True)
+        hint.setFixedWidth(CONTROL_WIDTH["lg"])
+        hint.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop
+        )
+        hint.setSizePolicy(
+            QtWidgets.QSizePolicy.Policy.Fixed,
+            QtWidgets.QSizePolicy.Policy.Preferred,
+        )
+        self.body.addRow("", hint)
+
+
+def _with_side_hint(
+    widget: QtWidgets.QWidget, hint: str | None
+) -> QtWidgets.QWidget:
+    if not hint:
+        return _control_slot(widget)
+    wrap = QtWidgets.QWidget()
+    wrap.setSizePolicy(
+        QtWidgets.QSizePolicy.Policy.Expanding,
+        QtWidgets.QSizePolicy.Policy.Preferred,
+    )
+    row = QtWidgets.QHBoxLayout(wrap)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(12)
+    row.setAlignment(QtCore.Qt.AlignmentFlag.AlignTop)
+    row.addWidget(
+        _control_slot(widget),
+        stretch=0,
+        alignment=QtCore.Qt.AlignmentFlag.AlignTop,
+    )
+    hint_lab = QtWidgets.QLabel(hint)
+    hint_lab.setObjectName("FieldHint")
+    hint_lab.setWordWrap(True)
+    hint_lab.setAlignment(
+        QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignTop
+    )
+    hint_lab.setSizePolicy(
+        QtWidgets.QSizePolicy.Policy.Expanding,
+        QtWidgets.QSizePolicy.Policy.Preferred,
+    )
+    hint_lab.setMinimumWidth(80)
+    row.addWidget(
+        hint_lab,
+        stretch=1,
+        alignment=QtCore.Qt.AlignmentFlag.AlignTop,
+    )
+    return wrap
+
+
+def _slider_value_row(
+    slider: QtWidgets.QSlider,
+    chip: QtWidgets.QLabel,
+    *,
+    width: str = "lg",
+) -> QtWidgets.QWidget:
+    wrap = QtWidgets.QWidget()
+    row = QtWidgets.QHBoxLayout(wrap)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(8)
+    row.setAlignment(QtCore.Qt.AlignmentFlag.AlignVCenter)
+    _set_control_height(slider)
+    chip.setAlignment(
+        QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+    )
+    chip.setFixedHeight(CONTROL_HEIGHT)
+    row.addWidget(
+        slider,
+        stretch=1,
+        alignment=QtCore.Qt.AlignmentFlag.AlignVCenter,
+    )
+    row.addWidget(
+        chip,
+        stretch=0,
+        alignment=QtCore.Qt.AlignmentFlag.AlignVCenter,
+    )
+    _set_control_width(wrap, width)
+    wrap.setFixedHeight(CONTROL_HEIGHT)
+    return wrap
 
 
 class SettingsDialog(QtWidgets.QDialog):
@@ -496,11 +887,6 @@ class SettingsDialog(QtWidgets.QDialog):
         title = QtWidgets.QLabel("Configuración")
         title.setObjectName("DialogTitle")
         header.addWidget(title)
-        subtitle = QtWidgets.QLabel(
-            "Captura, latencia, apariencia y calidad de traducción"
-        )
-        subtitle.setObjectName("DialogSubtitle")
-        header.addWidget(subtitle)
         root.addLayout(header)
 
         root.addWidget(self._build_app_preset_bar())
@@ -520,8 +906,12 @@ class SettingsDialog(QtWidgets.QDialog):
         assert save_btn is not None and cancel_btn is not None
         save_btn.setText("Guardar")
         save_btn.setObjectName("PrimaryButton")
+        _set_control_height(save_btn)
+        _pad_button_icon_gap(save_btn)
         cancel_btn.setText("Cancelar")
         cancel_btn.setObjectName("DialogCancel")
+        _set_control_height(cancel_btn)
+        _pad_button_icon_gap(cancel_btn)
         buttons.accepted.connect(self.accept)
         buttons.rejected.connect(self.reject)
         root.addWidget(buttons)
@@ -544,45 +934,38 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _build_app_preset_bar(self) -> QtWidgets.QWidget:
         bar = _Section("Preset general")
-        row = QtWidgets.QWidget()
-        layout = QtWidgets.QHBoxLayout(row)
-        layout.setContentsMargins(0, 0, 0, 0)
-        layout.setSpacing(8)
 
         self.app_preset = QtWidgets.QComboBox()
-        self.app_preset.setMinimumWidth(160)
+        _size_combo(self.app_preset, "lg")
         self.app_preset.currentIndexChanged.connect(self._on_app_preset_changed)
-        layout.addWidget(self.app_preset, stretch=1)
 
-        self.app_preset_save_btn = QtWidgets.QPushButton("Guardar")
-        self.app_preset_save_btn.setObjectName("SecondaryButton")
-        self.app_preset_save_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.app_preset_save_btn.setToolTip(
-            "Sobrescribe el preset activo con el estado actual (todas las pestañas y ventanas)."
+        self.app_preset_save_btn = _make_icon_tool_button(
+            name="Guardar",
+            icon_kind="save",
         )
         self.app_preset_save_btn.clicked.connect(self._save_app_preset)
-        layout.addWidget(self.app_preset_save_btn)
 
-        self.app_preset_save_as_btn = QtWidgets.QPushButton("Guardar como…")
-        self.app_preset_save_as_btn.setObjectName("SecondaryButton")
-        self.app_preset_save_as_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.app_preset_save_as_btn.clicked.connect(self._save_app_preset_as)
-        layout.addWidget(self.app_preset_save_as_btn)
-
-        self.app_preset_delete_btn = QtWidgets.QPushButton("Borrar")
-        self.app_preset_delete_btn.setObjectName("GhostButton")
-        self.app_preset_delete_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.app_preset_delete_btn.clicked.connect(self._delete_app_preset)
-        layout.addWidget(self.app_preset_delete_btn)
-
-        bar.body.addRow("Activo", row)
-        hint = QtWidgets.QLabel(
-            "Guarda o restaura absolutamente todo: captura, latencia, traducción, "
-            "apariencia y posición/tamaño de ventanas. Cambiar el selector aplica al instante."
+        self.app_preset_save_as_btn = _make_icon_tool_button(
+            name="Guardar como…",
+            icon_kind="save_as",
         )
-        hint.setObjectName("FieldHint")
-        hint.setWordWrap(True)
-        bar.body.addRow("", hint)
+        self.app_preset_save_as_btn.clicked.connect(self._save_app_preset_as)
+
+        self.app_preset_delete_btn = _make_icon_tool_button(
+            name="Borrar",
+            icon_kind="delete",
+        )
+        self.app_preset_delete_btn.clicked.connect(self._delete_app_preset)
+
+        bar.add_row(
+            "Activo",
+            _combo_actions_row(
+                self.app_preset,
+                self.app_preset_save_btn,
+                self.app_preset_save_as_btn,
+                self.app_preset_delete_btn,
+            ),
+        )
 
         if self._controller is None:
             self.app_preset.setEnabled(False)
@@ -685,25 +1068,29 @@ class SettingsDialog(QtWidgets.QDialog):
             self._load_profile_into_sliders(mode)
 
             self.captions_show_partials.setChecked(
-                bool(self._config.get("captions_show_partials", True))
+                bool(self._config.get("captions_show_partials", False))
             )
             self.captions_allow_rewrite.setChecked(
                 bool(self._config.get("captions_allow_rewrite", True))
             )
 
             self.font_size.setValue(int(self._config.get("font_size", 28)))
+            self.font_size_value.setText(str(self.font_size.value()))
             self.padding.setValue(int(self._config.get("padding", 24)))
-            align_idx = self.text_align.findData(
-                str(self._config.get("text_align", "center"))
-            )
-            self.text_align.setCurrentIndex(align_idx if align_idx >= 0 else 0)
+            self.padding_value.setText(str(self.padding.value()))
+            self._set_text_align(str(self._config.get("text_align", "center")))
             self._set_swatch(
-                self.font_color_btn, str(self._config.get("font_color", "#ffffff"))
+                self.font_color_btn,
+                self.font_color_hex,
+                str(self._config.get("font_color", "#ffffff")),
             )
             self._set_swatch(
-                self.bg_color_btn, str(self._config.get("bg_color", "#000000"))
+                self.bg_color_btn,
+                self.bg_color_hex,
+                str(self._config.get("bg_color", "#000000")),
             )
             self.alpha.setValue(int(float(self._config.get("bg_alpha", 0.55)) * 100))
+            self.alpha_value.setText(f"{self.alpha.value()}%")
 
             second_idx = self.second_line_mode.findData(
                 str(self._config.get("second_line_mode", "live_asr"))
@@ -840,28 +1227,21 @@ class SettingsDialog(QtWidgets.QDialog):
         scroll.setWidget(body)
         return scroll
 
-    def _build_general_tab(self, config: dict[str, Any]) -> QtWidgets.QWidget:
+    def _new_tab_body(self) -> tuple[QtWidgets.QWidget, QtWidgets.QVBoxLayout]:
         body = QtWidgets.QWidget()
         body.setObjectName("SettingsBody")
-        body_layout = QtWidgets.QVBoxLayout(body)
-        body_layout.setContentsMargins(0, 8, 8, 0)
-        body_layout.setSpacing(18)
+        layout = QtWidgets.QVBoxLayout(body)
+        layout.setContentsMargins(16, 16, 16, 16)
+        layout.setSpacing(18)
+        return body, layout
+
+    def _build_general_tab(self, config: dict[str, Any]) -> QtWidgets.QWidget:
+        body, body_layout = self._new_tab_body()
 
         capture = _Section("Captura")
-        lang_row = QtWidgets.QHBoxLayout()
-        lang_row.setSpacing(8)
         self.language = QtWidgets.QComboBox()
-        lang_row.addWidget(self.language, stretch=1)
-        self.install_langs_btn = QtWidgets.QPushButton("Instalar…")
-        self.install_langs_btn.setObjectName("SecondaryButton")
-        self.install_langs_btn.setToolTip(
-            "Añade idiomas del catálogo a los selectores de Settings y del overlay."
-        )
-        self.install_langs_btn.clicked.connect(self._install_languages)
-        lang_row.addWidget(self.install_langs_btn)
-        lang_wrap = QtWidgets.QWidget()
-        lang_wrap.setLayout(lang_row)
-        capture.add_row("Idioma", lang_wrap)
+        _size_combo(self.language, "md")
+        capture.add_row("Idioma", self.language)
         self._refresh_language_combo(str(config.get("language", "en")))
 
         self.model = QtWidgets.QComboBox()
@@ -870,6 +1250,7 @@ class SettingsDialog(QtWidgets.QDialog):
         current_model = str(config.get("model", "medium"))
         idx = self.model.findText(current_model)
         self.model.setCurrentIndex(idx if idx >= 0 else 1)
+        _size_combo(self.model, "sm")
         capture.add_row("Modelo Whisper", self.model)
 
         self.audio = QtWidgets.QComboBox()
@@ -885,9 +1266,6 @@ class SettingsDialog(QtWidgets.QDialog):
             if not dev:
                 continue
             self.audio.addItem(_friendly_audio_label(dev), dev)
-            self.audio.setItemData(
-                self.audio.count() - 1, dev, QtCore.Qt.ItemDataRole.ToolTipRole
-            )
         current = str(config.get("audio_monitor") or "")
         if current:
             pos = self.audio.findData(current)
@@ -895,11 +1273,11 @@ class SettingsDialog(QtWidgets.QDialog):
                 self.audio.setCurrentIndex(pos)
             else:
                 self.audio.insertItem(0, _friendly_audio_label(current), current)
-                self.audio.setItemData(0, current, QtCore.Qt.ItemDataRole.ToolTipRole)
                 self.audio.setCurrentIndex(0)
+        _size_combo(self.audio, "lg")
         capture.add_row("Audio (monitor)", self.audio)
         if audio_error:
-            err = QtWidgets.QLabel(f"Aviso audio: {audio_error}")
+            err = QtWidgets.QLabel(f"No se pudo listar audio: {audio_error}")
             err.setObjectName("FieldHint")
             err.setWordWrap(True)
             capture.body.addRow("", err)
@@ -913,79 +1291,64 @@ class SettingsDialog(QtWidgets.QDialog):
         mode_idx = self.latency_mode.findData(mode)
         self.latency_mode.setCurrentIndex(mode_idx if mode_idx >= 0 else 0)
         self.latency_mode.currentIndexChanged.connect(self._on_mode_changed)
-        latency.add_row("Modo", self.latency_mode)
+        _size_combo(self.latency_mode, "md")
+        self.reset_btn = _make_icon_tool_button(
+            name="Restablecer valores del modo",
+            icon_kind="reset",
+        )
+        self.reset_btn.clicked.connect(self._reset_mode)
+        latency.add_row(
+            "Modo",
+            _combo_actions_row(self.latency_mode, self.reset_btn),
+            HINT_LATENCY_MODE,
+        )
 
-        conf_wrap = QtWidgets.QWidget()
-        conf_row = QtWidgets.QHBoxLayout(conf_wrap)
-        conf_row.setContentsMargins(0, 0, 0, 0)
-        conf_row.setSpacing(10)
         self.confidence = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.confidence.setRange(1, 5)
         self.confidence_value = QtWidgets.QLabel("2")
         self.confidence_value.setObjectName("ValueChip")
-        self.confidence_value.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
-        conf_row.addWidget(self.confidence, stretch=1)
-        conf_row.addWidget(self.confidence_value)
-        latency.add_row("Confianza", conf_wrap, TOOLTIP_CONFIDENCE)
+        self.confidence_value.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        conf_wrap = _slider_value_row(self.confidence, self.confidence_value)
+        latency.add_row("Confianza", conf_wrap, HINT_CONFIDENCE)
         self.confidence.valueChanged.connect(self._on_confidence_changed)
 
-        lat_wrap = QtWidgets.QWidget()
-        lat_row = QtWidgets.QHBoxLayout(lat_wrap)
-        lat_row.setContentsMargins(0, 0, 0, 0)
-        lat_row.setSpacing(10)
         self.max_latency = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
-        self.max_latency.setRange(5, 50)  # 0.5–5.0 s en décimas
+        self.max_latency.setRange(2, 30)  # 0.2–3.0 s en décimas
         self.max_latency_value = QtWidgets.QLabel("3.0")
         self.max_latency_value.setObjectName("ValueChip")
-        self.max_latency_value.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
-        lat_row.addWidget(self.max_latency, stretch=1)
-        lat_row.addWidget(self.max_latency_value)
-        latency.add_row("Techo (s)", lat_wrap, TOOLTIP_MAX_LATENCY)
+        self.max_latency_value.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        lat_wrap = _slider_value_row(self.max_latency, self.max_latency_value)
+        latency.add_row("Techo (s)", lat_wrap, HINT_MAX_LATENCY)
         self.max_latency.valueChanged.connect(self._on_max_latency_changed)
-
-        self.reset_btn = QtWidgets.QPushButton("Restablecer valores del modo")
-        self.reset_btn.setObjectName("GhostButton")
-        self.reset_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.reset_btn.setToolTip(
-            "Vuelve a los valores de fábrica del modo seleccionado."
-        )
-        self.reset_btn.clicked.connect(self._reset_mode)
-        latency.body.addRow("", self.reset_btn)
-
-        note = QtWidgets.QLabel(
-            "El chunk lo fija el modo (estable ≈ 0.8 s, baja ≈ 0.35 s). "
-            "Cambios de modo/confianza/techo se aplican al guardar sin reiniciar Whisper."
-        )
-        note.setObjectName("FieldHint")
-        note.setWordWrap(True)
-        latency.body.addRow("", note)
         body_layout.addWidget(latency)
 
         captions = _Section("Subtítulos")
-        self.captions_show_partials = QtWidgets.QCheckBox("Mostrar texto parcial")
+        self.captions_show_partials = MarqueeToggle("Mostrar texto parcial")
         self.captions_show_partials.setChecked(
-            bool(config.get("captions_show_partials", True))
+            bool(config.get("captions_show_partials", False))
         )
-        self.captions_show_partials.setToolTip(TOOLTIP_SHOW_PARTIALS)
-        captions.body.addRow(self.captions_show_partials)
-        self.captions_allow_rewrite = QtWidgets.QCheckBox(
+        captions.body.addRow(
+            _with_side_hint(self.captions_show_partials, HINT_SHOW_PARTIALS)
+        )
+        self.captions_allow_rewrite = MarqueeToggle(
             "Permitir reescritura de lo ya mostrado"
         )
         self.captions_allow_rewrite.setChecked(
             bool(config.get("captions_allow_rewrite", True))
         )
-        self.captions_allow_rewrite.setToolTip(TOOLTIP_ALLOW_REWRITE)
-        captions.body.addRow(self.captions_allow_rewrite)
+        captions.body.addRow(
+            _with_side_hint(self.captions_allow_rewrite, HINT_ALLOW_REWRITE)
+        )
         body_layout.addWidget(captions)
         body_layout.addStretch(1)
         return self._wrap_scroll(body)
 
     def _build_appearance_tab(self, config: dict[str, Any]) -> QtWidgets.QWidget:
-        body = QtWidgets.QWidget()
-        body.setObjectName("SettingsBody")
-        body_layout = QtWidgets.QVBoxLayout(body)
-        body_layout.setContentsMargins(0, 8, 8, 0)
-        body_layout.setSpacing(18)
+        body, body_layout = self._new_tab_body()
 
         self._preview_stage = QtWidgets.QFrame()
         self._preview_stage.setObjectName("PreviewStage")
@@ -1005,56 +1368,118 @@ class SettingsDialog(QtWidgets.QDialog):
         body_layout.addWidget(self._preview_stage)
 
         look = _Section("Texto y colores")
-        self.font_size = QtWidgets.QSpinBox()
-        self.font_size.setRange(10, 100)
-        self.font_size.setValue(int(config.get("font_size", 28)))
-        self.font_size.valueChanged.connect(self._refresh_preview)
-        look.add_row("Tamaño de texto", self.font_size)
-
-        self.padding = QtWidgets.QSpinBox()
-        self.padding.setRange(0, 100)
-        self.padding.setValue(int(config.get("padding", 24)))
-        self.padding.valueChanged.connect(self._refresh_preview)
-        look.add_row("Padding", self.padding)
-
-        self.text_align = QtWidgets.QComboBox()
-        for mode_key in TEXT_ALIGN_MODES:
-            self.text_align.addItem(TEXT_ALIGN_LABELS[mode_key], mode_key)
-        current_align = str(config.get("text_align", "center"))
-        align_idx = self.text_align.findData(current_align)
-        self.text_align.setCurrentIndex(align_idx if align_idx >= 0 else 0)
-        self.text_align.setToolTip(
-            "Alineación horizontal del subtítulo en el overlay (centro o izquierda)."
+        font_wrap, self.font_size, self.font_size_value = _int_slider_row(
+            low=10, high=100, value=int(config.get("font_size", 28))
         )
-        self.text_align.currentIndexChanged.connect(self._refresh_preview)
-        look.add_row("Alineación", self.text_align)
+        self.font_size.valueChanged.connect(self._on_font_size_changed)
+        look.add_row("Tamaño de texto", font_wrap)
 
+        pad_wrap, self.padding, self.padding_value = _int_slider_row(
+            low=0, high=100, value=int(config.get("padding", 24))
+        )
+        self.padding.valueChanged.connect(self._on_padding_changed)
+        look.add_row("Padding", pad_wrap)
+
+        align_wrap = QtWidgets.QWidget()
+        align_row = QtWidgets.QHBoxLayout(align_wrap)
+        align_row.setContentsMargins(0, 0, 0, 0)
+        align_row.setSpacing(8)
+        align_row.setAlignment(QtCore.Qt.AlignmentFlag.AlignVCenter)
+        self._align_group = QtWidgets.QButtonGroup(self)
+        self._align_group.setExclusive(True)
+        self.align_left_btn = QtWidgets.QPushButton()
+        self.align_left_btn.setObjectName("AlignToggle")
+        self.align_left_btn.setCheckable(True)
+        self.align_left_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.align_left_btn.setIcon(_alignment_icon("left"))
+        self.align_left_btn.setIconSize(QtCore.QSize(16, 16))
+        self.align_left_btn.setFixedSize(CONTROL_HEIGHT, CONTROL_HEIGHT)
+        self.align_left_btn.setAccessibleName(TEXT_ALIGN_LABELS["left"])
+        self.align_left_btn.setToolTip(TEXT_ALIGN_LABELS["left"])
+        self.align_center_btn = QtWidgets.QPushButton()
+        self.align_center_btn.setObjectName("AlignToggle")
+        self.align_center_btn.setCheckable(True)
+        self.align_center_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.align_center_btn.setIcon(_alignment_icon("center"))
+        self.align_center_btn.setIconSize(QtCore.QSize(16, 16))
+        self.align_center_btn.setFixedSize(CONTROL_HEIGHT, CONTROL_HEIGHT)
+        self.align_center_btn.setAccessibleName(TEXT_ALIGN_LABELS["center"])
+        self.align_center_btn.setToolTip(TEXT_ALIGN_LABELS["center"])
+        self._align_group.addButton(self.align_left_btn)
+        self._align_group.addButton(self.align_center_btn)
+        align_row.addWidget(self.align_left_btn)
+        align_row.addWidget(self.align_center_btn)
+        align_row.addStretch(1)
+        self._set_text_align(str(config.get("text_align", "center")))
+        self.align_left_btn.toggled.connect(self._on_align_toggled)
+        self.align_center_btn.toggled.connect(self._on_align_toggled)
+        look.add_row("Alineación", align_wrap)
+
+        font_color_wrap = QtWidgets.QWidget()
+        font_color_row = QtWidgets.QHBoxLayout(font_color_wrap)
+        font_color_row.setContentsMargins(0, 0, 0, 0)
+        font_color_row.setSpacing(10)
+        font_color_row.setAlignment(QtCore.Qt.AlignmentFlag.AlignVCenter)
         self.font_color_btn = QtWidgets.QPushButton()
         self.font_color_btn.setObjectName("ColorSwatch")
         self.font_color_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self._set_swatch(self.font_color_btn, str(config.get("font_color", "#ffffff")))
+        self.font_color_btn.setAccessibleName("Color de texto")
+        self.font_color_btn.setToolTip("Color de texto")
+        _set_control_height(self.font_color_btn)
+        self.font_color_hex = QtWidgets.QLabel()
+        self.font_color_hex.setObjectName("ColorHex")
+        self.font_color_hex.setFixedHeight(CONTROL_HEIGHT)
+        self.font_color_hex.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        self._set_swatch(
+            self.font_color_btn,
+            self.font_color_hex,
+            str(config.get("font_color", "#ffffff")),
+        )
         self.font_color_btn.clicked.connect(self._pick_font_color)
-        look.add_row("Color de texto", self.font_color_btn)
+        font_color_row.addWidget(self.font_color_btn)
+        font_color_row.addWidget(self.font_color_hex)
+        font_color_row.addStretch(1)
+        look.add_row("Color de texto", font_color_wrap)
 
+        bg_color_wrap = QtWidgets.QWidget()
+        bg_color_row = QtWidgets.QHBoxLayout(bg_color_wrap)
+        bg_color_row.setContentsMargins(0, 0, 0, 0)
+        bg_color_row.setSpacing(10)
+        bg_color_row.setAlignment(QtCore.Qt.AlignmentFlag.AlignVCenter)
         self.bg_color_btn = QtWidgets.QPushButton()
         self.bg_color_btn.setObjectName("ColorSwatch")
         self.bg_color_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self._set_swatch(self.bg_color_btn, str(config.get("bg_color", "#000000")))
+        self.bg_color_btn.setAccessibleName("Color de fondo")
+        self.bg_color_btn.setToolTip("Color de fondo")
+        _set_control_height(self.bg_color_btn)
+        self.bg_color_hex = QtWidgets.QLabel()
+        self.bg_color_hex.setObjectName("ColorHex")
+        self.bg_color_hex.setFixedHeight(CONTROL_HEIGHT)
+        self.bg_color_hex.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignLeft | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        self._set_swatch(
+            self.bg_color_btn,
+            self.bg_color_hex,
+            str(config.get("bg_color", "#000000")),
+        )
         self.bg_color_btn.clicked.connect(self._pick_bg_color)
-        look.add_row("Color de fondo", self.bg_color_btn)
+        bg_color_row.addWidget(self.bg_color_btn)
+        bg_color_row.addWidget(self.bg_color_hex)
+        bg_color_row.addStretch(1)
+        look.add_row("Color de fondo", bg_color_wrap)
 
-        alpha_wrap = QtWidgets.QWidget()
-        alpha_row = QtWidgets.QHBoxLayout(alpha_wrap)
-        alpha_row.setContentsMargins(0, 0, 0, 0)
-        alpha_row.setSpacing(10)
         self.alpha = QtWidgets.QSlider(QtCore.Qt.Orientation.Horizontal)
         self.alpha.setRange(5, 100)
         self.alpha.setValue(int(float(config.get("bg_alpha", 0.55)) * 100))
         self.alpha_value = QtWidgets.QLabel(f"{self.alpha.value()}%")
         self.alpha_value.setObjectName("ValueChip")
-        self.alpha_value.setAlignment(QtCore.Qt.AlignmentFlag.AlignRight)
-        alpha_row.addWidget(self.alpha, stretch=1)
-        alpha_row.addWidget(self.alpha_value)
+        self.alpha_value.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignRight | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        alpha_wrap = _slider_value_row(self.alpha, self.alpha_value)
         self.alpha.valueChanged.connect(self._on_alpha_changed)
         look.add_row("Transparencia", alpha_wrap)
         body_layout.addWidget(look)
@@ -1062,16 +1487,12 @@ class SettingsDialog(QtWidgets.QDialog):
         return self._wrap_scroll(body)
 
     def _build_translation_tab(self, config: dict[str, Any]) -> QtWidgets.QWidget:
-        body = QtWidgets.QWidget()
-        body.setObjectName("SettingsBody")
-        body_layout = QtWidgets.QVBoxLayout(body)
-        body_layout.setContentsMargins(0, 8, 8, 0)
-        body_layout.setSpacing(18)
+        body, body_layout = self._new_tab_body()
 
         display = _Section("Visualización")
         self.second_line_mode = QtWidgets.QComboBox()
         second_line_labels = {
-            "live_asr": "ASR en vivo",
+            "live_asr": "Reconocimiento en vivo",
             "original": "Idioma original confirmado",
             "none": "Nada",
         }
@@ -1080,11 +1501,8 @@ class SettingsDialog(QtWidgets.QDialog):
         current_mode = str(config.get("second_line_mode", "live_asr"))
         idx = self.second_line_mode.findData(current_mode)
         self.second_line_mode.setCurrentIndex(idx if idx >= 0 else 0)
-        self.second_line_mode.setToolTip(
-            "Con traducción: línea 1 = traducción; línea 2 según este selector. "
-            "Sin traducción: una sola línea ASR (confirmado, en vivo, o solo confirmado)."
-        )
-        display.add_row("Segunda línea", self.second_line_mode)
+        _size_combo(self.second_line_mode, "md")
+        display.add_row("Segunda línea", self.second_line_mode, HINT_SECOND_LINE)
 
         self.tx_sticky_mode = QtWidgets.QComboBox()
         for mode_key in TRANSLATION_STICKY_MODES:
@@ -1092,76 +1510,93 @@ class SettingsDialog(QtWidgets.QDialog):
         sticky = str(config.get("translation_sticky_mode", "off"))
         sticky_idx = self.tx_sticky_mode.findData(sticky)
         self.tx_sticky_mode.setCurrentIndex(sticky_idx if sticky_idx >= 0 else 0)
-        display.add_row("Modo sticky", self.tx_sticky_mode, TOOLTIP_TX_STICKY)
+        _size_combo(self.tx_sticky_mode, "md")
+        display.add_row("Modo sticky", self.tx_sticky_mode, HINT_TX_STICKY)
         body_layout.addWidget(display)
 
         quality = _Section("Calidad de decoding")
         self.tx_preset = QtWidgets.QComboBox()
         self.tx_preset.currentIndexChanged.connect(self._on_tx_preset_changed)
-        quality.add_row("Preset", self.tx_preset)
+        _size_combo(self.tx_preset, "lg")
 
-        self.tx_beam = QtWidgets.QSpinBox()
-        self.tx_beam.setRange(1, 8)
-        self.tx_beam.valueChanged.connect(self._on_tx_decode_edited)
-        quality.add_row("Beam size", self.tx_beam, TOOLTIP_TX_BEAM)
-
-        self.tx_length = QtWidgets.QDoubleSpinBox()
-        self.tx_length.setRange(0.6, 1.5)
-        self.tx_length.setSingleStep(0.1)
-        self.tx_length.setDecimals(1)
-        self.tx_length.valueChanged.connect(self._on_tx_decode_edited)
-        quality.add_row("Length penalty", self.tx_length, TOOLTIP_TX_LENGTH)
-
-        self.tx_ngram = QtWidgets.QSpinBox()
-        self.tx_ngram.setRange(0, 5)
-        self.tx_ngram.valueChanged.connect(self._on_tx_decode_edited)
-        quality.add_row("No-repeat n-gram", self.tx_ngram, TOOLTIP_TX_NGRAM)
-
-        actions = QtWidgets.QHBoxLayout()
-        actions.setSpacing(8)
-        self.tx_save_btn = QtWidgets.QPushButton("Guardar como preset…")
-        self.tx_save_btn.setObjectName("SecondaryButton")
-        self.tx_save_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.tx_save_btn.clicked.connect(self._save_translation_preset)
-        self.tx_delete_btn = QtWidgets.QPushButton("Borrar preset")
-        self.tx_delete_btn.setObjectName("GhostButton")
-        self.tx_delete_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
-        self.tx_delete_btn.clicked.connect(self._delete_translation_preset)
-        actions.addWidget(self.tx_save_btn)
-        actions.addWidget(self.tx_delete_btn)
-        actions.addStretch(1)
-        actions_wrap = QtWidgets.QWidget()
-        actions_wrap.setLayout(actions)
-        quality.body.addRow("", actions_wrap)
-
-        tx_note = QtWidgets.QLabel(
-            "Rápido / Equilibrado / Calidad son de fábrica (no se borran). "
-            "Editar un valor pasa a Custom. Los cambios se aplican al Guardar sin reiniciar Whisper."
+        self.tx_save_btn = _make_icon_tool_button(
+            name="Guardar",
+            icon_kind="save",
         )
-        tx_note.setObjectName("FieldHint")
-        tx_note.setWordWrap(True)
-        quality.body.addRow("", tx_note)
+        self.tx_save_btn.clicked.connect(self._save_translation_preset)
+
+        self.tx_save_as_btn = _make_icon_tool_button(
+            name="Guardar como…",
+            icon_kind="save_as",
+        )
+        self.tx_save_as_btn.clicked.connect(self._save_translation_preset_as)
+
+        self.tx_delete_btn = _make_icon_tool_button(
+            name="Borrar",
+            icon_kind="delete",
+        )
+        self.tx_delete_btn.clicked.connect(self._delete_translation_preset)
+
+        quality.add_row(
+            "Preset",
+            _combo_actions_row(
+                self.tx_preset,
+                self.tx_save_btn,
+                self.tx_save_as_btn,
+                self.tx_delete_btn,
+            ),
+        )
+
+        # Rangos = clamps de config; length_penalty en décimas (0.6–1.5, paso 0.1).
+        beam_wrap, self.tx_beam, self.tx_beam_value = _int_slider_row(
+            low=1, high=8, value=4
+        )
+        self.tx_beam.valueChanged.connect(self._on_tx_decode_slider_changed)
+        quality.add_row("Beam size", beam_wrap, HINT_TX_BEAM)
+
+        length_wrap, self.tx_length, self.tx_length_value = _int_slider_row(
+            low=6,
+            high=15,
+            value=10,
+            format_value=lambda v: f"{v / 10:.1f}",
+            chip_min_width=40,
+        )
+        self.tx_length.valueChanged.connect(self._on_tx_decode_slider_changed)
+        quality.add_row("Length penalty", length_wrap, HINT_TX_LENGTH)
+
+        ngram_wrap, self.tx_ngram, self.tx_ngram_value = _int_slider_row(
+            low=0, high=5, value=3
+        )
+        self.tx_ngram.valueChanged.connect(self._on_tx_decode_slider_changed)
+        quality.add_row("No-repeat n-gram", ngram_wrap, HINT_TX_NGRAM)
         body_layout.addWidget(quality)
         body_layout.addStretch(1)
         return self._wrap_scroll(body)
 
-    def _set_swatch(self, button: QtWidgets.QPushButton, hex_color: str) -> None:
+    def _set_swatch(
+        self,
+        button: QtWidgets.QPushButton,
+        hex_label: QtWidgets.QLabel,
+        hex_color: str,
+    ) -> None:
         color = QtGui.QColor(hex_color)
         if not color.isValid():
             color = QtGui.QColor("#000000")
             hex_color = color.name()
-        button.setText(hex_color)
+        button.setProperty("hexColor", hex_color)
+        button.setText("")
+        hex_label.setText(hex_color)
         button.setStyleSheet(
             f"""
             QPushButton#ColorSwatch {{
                 background: {hex_color};
-                color: {_contrast_text(color)};
                 border: 1px solid #4a5164;
-                border-radius: 8px;
-                padding: 8px 12px;
-                text-align: left;
-                font-family: "JetBrains Mono", "Cascadia Code", "Ubuntu Mono", monospace;
-                font-size: 12px;
+                border-radius: 6px;
+                min-width: 28px;
+                max-width: 28px;
+                min-height: 28px;
+                max-height: 28px;
+                padding: 0;
             }}
             QPushButton#ColorSwatch:hover {{
                 border-color: #e8b86d;
@@ -1169,16 +1604,48 @@ class SettingsDialog(QtWidgets.QDialog):
             """
         )
 
+    def _swatch_hex(self, button: QtWidgets.QPushButton) -> str:
+        raw = button.property("hexColor")
+        if isinstance(raw, str) and QtGui.QColor(raw).isValid():
+            return raw
+        return "#000000"
+
+    def _current_text_align(self) -> str:
+        if self.align_left_btn.isChecked():
+            return "left"
+        return "center"
+
+    def _set_text_align(self, mode: str) -> None:
+        want_left = str(mode) == "left"
+        self.align_left_btn.blockSignals(True)
+        self.align_center_btn.blockSignals(True)
+        self.align_left_btn.setChecked(want_left)
+        self.align_center_btn.setChecked(not want_left)
+        self.align_left_btn.blockSignals(False)
+        self.align_center_btn.blockSignals(False)
+
+    def _on_align_toggled(self, checked: bool) -> None:
+        if not checked:
+            return
+        self._refresh_preview()
+
+    def _on_font_size_changed(self, value: int) -> None:
+        self.font_size_value.setText(str(value))
+        self._refresh_preview()
+
+    def _on_padding_changed(self, value: int) -> None:
+        self.padding_value.setText(str(value))
+        self._refresh_preview()
+
     def _preview_alignment(self) -> QtCore.Qt.AlignmentFlag:
-        align = str(self.text_align.currentData() or "center")
-        if align == "left":
+        if self._current_text_align() == "left":
             return QtCore.Qt.AlignmentFlag.AlignLeft
         return QtCore.Qt.AlignmentFlag.AlignHCenter
 
     def _refresh_preview(self) -> None:
         font_size = int(self.font_size.value())
-        font_color = self.font_color_btn.text()
-        bg = QtGui.QColor(self.bg_color_btn.text())
+        font_color = self._swatch_hex(self.font_color_btn)
+        bg = QtGui.QColor(self._swatch_hex(self.bg_color_btn))
         if not bg.isValid():
             bg = QtGui.QColor("#000000")
         alpha = self.alpha.value() / 100.0
@@ -1205,40 +1672,20 @@ class SettingsDialog(QtWidgets.QDialog):
         self.alpha_value.setText(f"{value}%")
         self._refresh_preview()
 
-    def _installed_languages(self) -> list[str]:
-        raw = self._config.get("installed_languages") or ["en", "es"]
-        if not isinstance(raw, list):
-            return ["en", "es"]
-        return merge_installed_languages(raw, [])
-
     def _refresh_language_combo(self, preferred: str | None = None) -> None:
         current = preferred
         if current is None and self.language.count() > 0:
             current = str(self.language.currentData() or "")
         if not current:
             current = str(self._config.get("language", "en"))
-        installed = self._installed_languages()
-        if current not in installed:
-            installed = merge_installed_languages(installed, [current])
-            self._config["installed_languages"] = installed
+        current = str(current).strip().lower() or "en"
         self.language.blockSignals(True)
         self.language.clear()
-        for code in installed:
+        for code in AVAILABLE_LANGUAGES:
             self.language.addItem(language_label(code), code)
         idx = self.language.findData(current)
         self.language.setCurrentIndex(idx if idx >= 0 else 0)
         self.language.blockSignals(False)
-
-    def _install_languages(self) -> None:
-        dlg = InstallLanguagesDialog(self, self._installed_languages())
-        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
-            return
-        selected = dlg.selected_codes()
-        if not selected:
-            return
-        merged = merge_installed_languages(self._installed_languages(), selected)
-        self._config["installed_languages"] = merged
-        self._refresh_language_combo()
 
     def _current_mode(self) -> str:
         data = self.latency_mode.currentData()
@@ -1319,9 +1766,14 @@ class SettingsDialog(QtWidgets.QDialog):
     def _spins_decode(self) -> dict[str, float | int]:
         return {
             "beam_size": int(self.tx_beam.value()),
-            "length_penalty": float(self.tx_length.value()),
+            "length_penalty": self.tx_length.value() / 10.0,
             "no_repeat_ngram_size": int(self.tx_ngram.value()),
         }
+
+    def _sync_tx_decode_chips(self) -> None:
+        self.tx_beam_value.setText(str(self.tx_beam.value()))
+        self.tx_length_value.setText(f"{self.tx_length.value() / 10:.1f}")
+        self.tx_ngram_value.setText(str(self.tx_ngram.value()))
 
     def _refresh_translation_preset_combo(self) -> None:
         current = str(self._config.get("translation_decode_preset", "balanced"))
@@ -1348,8 +1800,9 @@ class SettingsDialog(QtWidgets.QDialog):
                 }
             )
             self.tx_beam.setValue(int(decode["beam_size"]))
-            self.tx_length.setValue(float(decode["length_penalty"]))
+            self.tx_length.setValue(int(round(float(decode["length_penalty"]) * 10)))
             self.tx_ngram.setValue(int(decode["no_repeat_ngram_size"]))
+            self._sync_tx_decode_chips()
         finally:
             self._loading_tx = False
 
@@ -1365,6 +1818,10 @@ class SettingsDialog(QtWidgets.QDialog):
         self._load_translation_decode_into_spins()
         self._sync_translation_preset_actions()
 
+    def _on_tx_decode_slider_changed(self, *_args: Any) -> None:
+        self._sync_tx_decode_chips()
+        self._on_tx_decode_edited()
+
     def _on_tx_decode_edited(self, *_args: Any) -> None:
         if self._loading_tx:
             return
@@ -1379,9 +1836,29 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def _sync_translation_preset_actions(self) -> None:
         preset = self._current_tx_preset()
-        self.tx_delete_btn.setEnabled(preset not in TRANSLATION_RESERVED_PRESET_IDS)
+        is_user = preset not in TRANSLATION_RESERVED_PRESET_IDS
+        self.tx_save_btn.setEnabled(is_user)
+        self.tx_delete_btn.setEnabled(is_user)
+        self.tx_save_as_btn.setEnabled(True)
 
     def _save_translation_preset(self) -> None:
+        preset = self._current_tx_preset()
+        if preset in TRANSLATION_RESERVED_PRESET_IDS:
+            return
+        try:
+            self._config = add_translation_user_preset(
+                self._config,
+                preset,
+                self._spins_decode(),
+            )
+        except ValueError as exc:
+            QtWidgets.QMessageBox.warning(self, "Preset", str(exc))
+            return
+        self._refresh_translation_preset_combo()
+        self._load_translation_decode_into_spins()
+        self._sync_translation_preset_actions()
+
+    def _save_translation_preset_as(self) -> None:
         name, ok = QtWidgets.QInputDialog.getText(
             self,
             "Guardar preset",
@@ -1433,21 +1910,30 @@ class SettingsDialog(QtWidgets.QDialog):
         self._load_translation_decode_into_spins()
         self._sync_translation_preset_actions()
 
-    def _pick_font_color(self) -> None:
-        color = QtWidgets.QColorDialog.getColor(
-            QtGui.QColor(self.font_color_btn.text()), self
+    def _pick_color(
+        self,
+        button: QtWidgets.QPushButton,
+        hex_label: QtWidgets.QLabel,
+    ) -> None:
+        dialog = QtWidgets.QColorDialog(
+            QtGui.QColor(self._swatch_hex(button)), self
         )
+        dialog.setOption(
+            QtWidgets.QColorDialog.ColorDialogOption.DontUseNativeDialog, True
+        )
+        dialog.setWindowTitle("Elegir color")
+        if dialog.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        color = dialog.currentColor()
         if color.isValid():
-            self._set_swatch(self.font_color_btn, color.name())
+            self._set_swatch(button, hex_label, color.name())
             self._refresh_preview()
 
+    def _pick_font_color(self) -> None:
+        self._pick_color(self.font_color_btn, self.font_color_hex)
+
     def _pick_bg_color(self) -> None:
-        color = QtWidgets.QColorDialog.getColor(
-            QtGui.QColor(self.bg_color_btn.text()), self
-        )
-        if color.isValid():
-            self._set_swatch(self.bg_color_btn, color.name())
-            self._refresh_preview()
+        self._pick_color(self.bg_color_btn, self.bg_color_hex)
 
     def result_config(self) -> dict[str, Any]:
         self._write_sliders_to_profile()
@@ -1457,7 +1943,7 @@ class SettingsDialog(QtWidgets.QDialog):
         else:
             self._config["translation_decode_preset"] = preset
         lang = str(self.language.currentData() or "en").strip().lower() or "en"
-        installed = merge_installed_languages(self._installed_languages(), [lang])
+        installed = list(AVAILABLE_LANGUAGES.keys())
         audio = self.audio.currentData()
         if audio is None:
             audio = self.audio.currentText()
@@ -1472,9 +1958,9 @@ class SettingsDialog(QtWidgets.QDialog):
                 "latency_profiles": deepcopy(self._profiles()),
                 "font_size": self.font_size.value(),
                 "padding": self.padding.value(),
-                "text_align": str(self.text_align.currentData() or "center"),
-                "font_color": self.font_color_btn.text(),
-                "bg_color": self.bg_color_btn.text(),
+                "text_align": self._current_text_align(),
+                "font_color": self._swatch_hex(self.font_color_btn),
+                "bg_color": self._swatch_hex(self.bg_color_btn),
                 "bg_alpha": self.alpha.value() / 100.0,
                 "captions_show_partials": self.captions_show_partials.isChecked(),
                 "captions_allow_rewrite": self.captions_allow_rewrite.isChecked(),

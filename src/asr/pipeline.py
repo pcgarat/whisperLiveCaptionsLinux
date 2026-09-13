@@ -246,7 +246,7 @@ class AsrPipeline:
         profile = effective_latency_profile(self.config)
         mode = str(self.config.get("latency_mode", "stable"))
         self._streamer.agreement_n = max(1, int(profile["agreement_n"]))
-        self._streamer.max_latency_sec = max(0.5, float(profile["max_latency_sec"]))
+        self._streamer.max_latency_sec = max(0.2, float(profile["max_latency_sec"]))
         if self._pump is not None:
             self._pump.min_chunk_seconds = float(profile["min_chunk_seconds"])
         if self._engine is not None:
@@ -611,7 +611,7 @@ class AsrPipeline:
         self._maybe_schedule(committed, language=language, seq=seq, is_partial=False)
 
     def _emit_partial(self, display: str, *, language: str, now: float) -> None:
-        if not bool(self.config.get("captions_show_partials", True)):
+        if not bool(self.config.get("captions_show_partials", False)):
             return
         self.out_queue.put(
             CaptionUpdate(

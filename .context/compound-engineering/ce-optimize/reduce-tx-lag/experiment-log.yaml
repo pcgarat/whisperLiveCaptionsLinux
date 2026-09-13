@@ -1,0 +1,81 @@
+spec: reduce-tx-lag
+run_id: "20260913-054225"
+started_at: "2026-09-13T03:42:25Z"
+baseline:
+  timestamp: "2026-09-13T03:43:00Z"
+  gates:
+    tests_passed: 1
+    tx_starvation: 0
+  diagnostics:
+    tx_lag_p95_ms: 34.776
+    tx_lag_p50_ms: 34.132
+    nllb_decode_p95_ms: 34.701
+    coalesce_skips_total: 0
+    translate_calls: 5
+    chars_translated: 27
+experiments:
+  - iteration: 1
+    hypothesis: "Beam adaptativo en NllbCt2Translator: si len(text)<24, clamp beam_size a max 2"
+    category: parameter-tuning
+    outcome: reverted
+    diagnostics:
+      tx_lag_p95_ms: 34.788
+    learnings: "Harness mock no pasa por NllbCt2Translator."
+  - iteration: 2
+    hypothesis: "En pipeline, clamp beam min(decode, 2) en delta/cortos"
+    category: architecture
+    outcome: kept
+    diagnostics:
+      tx_lag_p95_ms: 23.477
+    learnings: "34.776→23.477 (−32%). Decode dict en pipeline es el palanca correcta."
+  - iteration: 3
+    hypothesis: "Apretar clamp a beam max 1 en deltas/cortos"
+    category: parameter-tuning
+    outcome: kept
+    diagnostics:
+      tx_lag_p95_ms: 16.778
+    learnings: "23.477→16.778. Riesgo calidad real; validar smoke NLLB."
+  - iteration: 4
+    hypothesis: "Saltar deltas solo puntuación/espacios sin traductor"
+    category: preprocessing
+    outcome: reverted
+    diagnostics:
+      tx_lag_p95_ms: 17.209
+    learnings: "Neutral en este harness (sin deltas punct-only). Código útil en vivo pero no gana métrica aquí."
+best:
+  iteration: 3
+  hypothesis: "Apretar clamp a beam_size max 1 en deltas/append o textos <24"
+  outcome: kept
+  gates:
+    tests_passed: 1
+    tx_starvation: 0
+  diagnostics:
+    tx_lag_p95_ms: 16.778
+    tx_lag_p50_ms: 16.119
+    nllb_decode_p95_ms: 16.702
+    coalesce_skips_total: 0
+    translate_calls: 5
+    chars_translated: 27
+stopped_reason: max_iterations
+hypothesis_backlog:
+  - description: "Default translation_decode_preset a fast"
+    category: parameter-tuning
+    priority: low
+    dep_status: approved
+    required_deps: []
+  - description: "Cache LRU exact-match en pipeline antes de translate"
+    category: data-handling
+    priority: medium
+    dep_status: approved
+    required_deps: []
+  - description: "Fusionar deltas micro (<3 chars) con el siguiente job"
+    category: architecture
+    priority: low
+    dep_status: approved
+    required_deps: []
+  - description: "Envolver clamp beam≤1 detrás de flag opt_* (defaults seguros)"
+    category: architecture
+    priority: high
+    dep_status: approved
+    required_deps: []
+    notes: "Recomendado antes de merge a main"

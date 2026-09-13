@@ -221,7 +221,7 @@ def test_new_segment_keeps_old_translation_until_ready(
 
 
 def test_partial_can_carry_translation(qapp: QtWidgets.QApplication) -> None:
-    ov, q = _overlay(qapp)
+    ov, q = _overlay(qapp, cfg={"captions_show_partials": True})
     now = time.monotonic()
     q.put(
         CaptionUpdate(
@@ -624,6 +624,53 @@ def test_restore_geometry_applies_saved_size(
     ov.close()
 
 
+def test_restore_geometry_defaults_to_bottom_center(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    from PyQt6 import QtGui
+
+    from src.ui.overlay import _BOTTOM_MARGIN_PX
+
+    ov, _q = _overlay(
+        qapp,
+        cfg={
+            "window_width": 640,
+            "window_height": 180,
+            "window_pos": None,
+        },
+    )
+    ov._restore_geometry()
+    screen = QtGui.QGuiApplication.primaryScreen()
+    assert screen is not None
+    geo = screen.availableGeometry()
+    assert ov.x() == geo.x() + (geo.width() - ov.width()) // 2
+    assert ov.y() == max(geo.top(), geo.bottom() - ov.height() - _BOTTOM_MARGIN_PX)
+    ov.close()
+
+
+def test_clamp_to_screens_recenters_when_offscreen(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    from PyQt6 import QtGui
+
+    ov, _q = _overlay(
+        qapp,
+        cfg={
+            "window_width": 500,
+            "window_height": 160,
+            "window_pos": [-50000, -50000],
+        },
+    )
+    ov._restore_geometry()
+    expected = ov._default_bottom_center()
+    assert expected is not None
+    assert (ov.x(), ov.y()) == expected
+    screen = QtGui.QGuiApplication.primaryScreen()
+    assert screen is not None
+    assert screen.availableGeometry().contains(ov.frameGeometry().center())
+    ov.close()
+
+
 def test_sync_translation_ui_does_not_grow_saved_height(
     qapp: QtWidgets.QApplication,
 ) -> None:
@@ -785,7 +832,11 @@ def test_second_line_live_asr_without_translation(
 ) -> None:
     ov, q = _overlay(
         qapp,
-        cfg={"translation_enabled": False, "second_line_mode": "live_asr"},
+        cfg={
+            "translation_enabled": False,
+            "second_line_mode": "live_asr",
+            "captions_show_partials": True,
+        },
     )
     now = time.monotonic()
     q.put(
