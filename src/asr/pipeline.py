@@ -17,6 +17,7 @@ from src.config import (
     effective_latency_profile,
     effective_translation_decode,
 )
+from src.debug.trace import SessionTracer
 
 logger = logging.getLogger(__name__)
 
@@ -104,9 +105,11 @@ class AsrPipeline:
         config: dict[str, Any],
         out_queue: queue.Queue[CaptionUpdate],
         translator: Translator | None = None,
+        tracer: SessionTracer | None = None,
     ) -> None:
         self.config = config
         self.out_queue = out_queue
+        self._tracer = tracer
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
         self._capture: SystemAudioCapture | None = None
@@ -190,12 +193,32 @@ class AsrPipeline:
             return
         self._preload_translator_instance(translator)
 
+    def _emit_notice(self, message: str) -> None:
+        self.out_queue.put(
+            CaptionUpdate(
+                text="",
+                is_final=False,
+                language=str(self.config.get("language") or "en"),
+                ts_mono=time.monotonic(),
+                notice=message,
+            )
+        )
+
+    def _notify_translator_device(self, translator: Translator) -> None:
+        take = getattr(translator, "take_cpu_fallback_notice", None)
+        if not callable(take):
+            return
+        message = take()
+        if message:
+            self._emit_notice(message)
+
     def _preload_translator_instance(self, translator: Translator) -> None:
         load = getattr(translator, "load", None)
         if not callable(load):
             return
         try:
             load()
+            self._notify_translator_device(translator)
         except Exception:
             logger.exception(
                 "No se pudo precargar el traductor; se intentará en el primer final"
@@ -281,15 +304,25 @@ class AsrPipeline:
     def _schedule_translation(self, job: _TxJob) -> None:
         self._ensure_tx_worker()
         with self._tx_pending_cv:
+            prev = self._tx_pending
             self._tx_job_gen += 1
-            self._tx_pending = _TxJob(
+            scheduled = _TxJob(
                 seq=job.seq,
                 text=job.text,
                 language=job.language,
                 is_partial=job.is_partial,
                 gen=self._tx_job_gen,
             )
+            self._tx_pending = scheduled
             self._tx_pending_cv.notify()
+        if self._tracer is not None:
+            self._tracer.tx_schedule(
+                seq=scheduled.seq,
+                gen=scheduled.gen,
+                is_partial=scheduled.is_partial,
+                chars=len(scheduled.text),
+                coalesced_prev_gen=prev.gen if prev is not None else None,
+            )
 
     @staticmethod
     def _job_is_newer(candidate: _TxJob, current: _TxJob) -> bool:
@@ -360,11 +393,12 @@ class AsrPipeline:
                     emit_seq = job.seq
                     if self._last_committed.startswith(job.text) or job.is_partial:
                         emit_seq = max(emit_seq, self._caption_seq)
+                    emit_ts = time.monotonic()
                     payload = CaptionUpdate(
                         text=job.text,
                         is_final=not job.is_partial,
                         language=job.language,
-                        ts_mono=time.monotonic(),
+                        ts_mono=emit_ts,
                         translated_text=plan.emit_es,
                         seq=emit_seq,
                         translation_append=False,
@@ -378,6 +412,17 @@ class AsrPipeline:
                         self._tx_pending = None
                 if payload is not None:
                     self.out_queue.put(payload)
+                    if self._tracer is not None:
+                        self._tracer.tx_done(
+                            seq=payload.seq,
+                            gen=job.gen,
+                            decode_ms=0.0,
+                            chars_in=0,
+                            chars_out=len(plan.emit_es),
+                            is_partial=job.is_partial,
+                            reused_checkpoint=True,
+                            ts_mono=payload.ts_mono,
+                        )
                 if continue_with is not None:
                     job = continue_with
                     continue
@@ -399,6 +444,7 @@ class AsrPipeline:
             translation_enabled, target_lang, translator, decode = (
                 self.translation_snapshot()
             )
+            decode_t0 = time.monotonic()
             translated = translate_confirmed(
                 to_translate,
                 source_lang=job.language,
@@ -407,6 +453,8 @@ class AsrPipeline:
                 translator=translator,
                 decode=decode,
             )
+            self._notify_translator_device(translator)
+            decode_ms = (time.monotonic() - decode_t0) * 1000.0
 
             # Siempre emitir y avanzar la base aunque llegue un job más nuevo
             # durante el decode (anti-starvation de la línea ES).
@@ -432,11 +480,12 @@ class AsrPipeline:
                         emit_seq = max(emit_seq, self._caption_seq)
                     elif job.is_partial:
                         emit_seq = max(emit_seq, self._caption_seq)
+                    emit_ts = time.monotonic()
                     payload = CaptionUpdate(
                         text=job.text,
                         is_final=not job.is_partial,
                         language=job.language,
-                        ts_mono=time.monotonic(),
+                        ts_mono=emit_ts,
                         translated_text=out_es,
                         seq=emit_seq,
                         translation_append=append,
@@ -455,6 +504,26 @@ class AsrPipeline:
 
             if payload is not None:
                 self.out_queue.put(payload)
+                if self._tracer is not None:
+                    self._tracer.tx_done(
+                        seq=payload.seq,
+                        gen=job.gen,
+                        decode_ms=decode_ms,
+                        chars_in=len(to_translate),
+                        chars_out=len(payload.translated_text or ""),
+                        is_partial=job.is_partial,
+                        reused_checkpoint=False,
+                        ts_mono=payload.ts_mono,
+                    )
+            elif self._tracer is not None:
+                self._tracer.record(
+                    "tx_skip",
+                    seq=job.seq,
+                    gen=job.gen,
+                    decode_ms=round(decode_ms, 3),
+                    chars_in=len(to_translate),
+                    is_partial=job.is_partial,
+                )
 
             if continue_with is not None:
                 job = continue_with
@@ -501,6 +570,10 @@ class AsrPipeline:
                 translation_append=is_extension,
             )
         )
+        if self._tracer is not None:
+            self._tracer.commit(
+                seq=seq, text=committed, is_extension=is_extension, ts_mono=now
+            )
 
         self._maybe_schedule(committed, language=language, seq=seq, is_partial=False)
 
@@ -514,6 +587,8 @@ class AsrPipeline:
                 seq=self._caption_seq,
             )
         )
+        if self._tracer is not None:
+            self._tracer.partial(seq=self._caption_seq, text=display)
         if self._sticky_mode() != "partials":
             return
         self._maybe_schedule(
@@ -540,15 +615,21 @@ class AsrPipeline:
         language = str(self.config.get("language", "en"))
         trim_sec = float(self.config.get("buffer_trimming_sec", 15.0))
 
+        sample_rate = float(self._capture.buffer.sample_rate)
         while not self._stop.is_set():
             audio = pump.poll()
             if audio is None:
                 time.sleep(0.05)
                 continue
 
+            audio_sec = float(audio.size) / sample_rate if audio.size else 0.0
             try:
+                t0 = time.monotonic()
                 hypothesis = self._engine.transcribe(audio)
+                infer_ms = (time.monotonic() - t0) * 1000.0
             except Exception as exc:
+                if self._tracer is not None:
+                    self._tracer.asr_error(str(exc))
                 self.out_queue.put(
                     CaptionUpdate(
                         text=f"[ASR error] {exc}",
@@ -559,6 +640,14 @@ class AsrPipeline:
                 )
                 time.sleep(0.5)
                 continue
+
+            if self._tracer is not None:
+                self._tracer.asr_infer(
+                    audio_sec=audio_sec,
+                    infer_ms=infer_ms,
+                    hyp_len=len(hypothesis or ""),
+                    hyp_preview=hypothesis or None,
+                )
 
             if not hypothesis:
                 continue
@@ -578,6 +667,7 @@ class AsrPipeline:
                     self._capture.buffer.sample_rate * min(8.0, trim_sec / 2)
                 )
                 if keep.size > keep_samples:
+                    keep_sec = keep_samples / sample_rate
                     self._capture.buffer.clear()
                     self._capture.buffer.write(keep[-keep_samples:])
                     self._streamer.reset()
@@ -586,3 +676,5 @@ class AsrPipeline:
                         self._last_tx_committed = ""
                         self._tx_checkpoints = []
                         self._tx_pending = None
+                    if self._tracer is not None:
+                        self._tracer.buffer_trim(keep_sec=keep_sec)

@@ -1,4 +1,4 @@
-.PHONY: help venv install run test lint format clean devices config-init check
+.PHONY: help venv install run debug test lint format clean devices config-init check
 
 PYTHON ?= python3.12
 VENV   := .venv
@@ -25,6 +25,11 @@ install: venv ## Instala dependencias de requirements.txt
 
 run: install ## Arranca la app de subtítulos
 	@$(PYQT_ENV); $(BIN)/python -m src.app
+
+debug: install ## Arranca con trazas de sesión → debug/trace.json
+	@mkdir -p debug
+	@echo "Modo debug: al cerrar la app se escribe debug/trace.json"
+	@$(PYQT_ENV); WLCL_DEBUG_TRACE=1 $(BIN)/python -m src.app
 
 test: install ## Ejecuta tests unitarios (offscreen + libs Qt del venv)
 	@QT6_ROOT="$$($(BIN)/python -c 'import PyQt6, pathlib; print(pathlib.Path(PyQt6.__file__).resolve().parent / "Qt6")')"; \

@@ -4,6 +4,7 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 config.json
+/debug/
 *.pt
 *.bin
 .mypy_cache/

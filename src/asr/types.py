@@ -14,3 +14,5 @@ class CaptionUpdate:
     seq: int = 0
     # Si True, `translated_text` es un delta a concatenar (no sustituye la línea ES).
     translation_append: bool = False
+    # Aviso operativo para el overlay (p. ej. fallback CPU); no altera captions.
+    notice: str | None = None

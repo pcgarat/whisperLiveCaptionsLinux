@@ -16,6 +16,11 @@ from src.asr.pipeline import AsrPipeline
 from src.asr.types import CaptionUpdate
 from src.audio.devices import list_audio_monitors
 from src.config import load_config, save_config, validate_config
+from src.debug.trace import (
+    SessionTracer,
+    debug_trace_enabled,
+    resolve_trace_path,
+)
 from src.ui.overlay import SubtitleOverlay
 from src.ui.settings import SettingsDialog
 
@@ -30,6 +35,15 @@ class AppController:
         self.pipeline: AsrPipeline | None = None
         self.overlay: SubtitleOverlay | None = None
         self._shutting_down = False
+        self._tracer: SessionTracer | None = None
+        if debug_trace_enabled():
+            self._tracer = SessionTracer(
+                resolve_trace_path(self.root), self.config
+            )
+            print(
+                f"[debug] trazas activas → {self._tracer.path}",
+                flush=True,
+            )
 
     def _ensure_audio_device(self) -> None:
         if self.config.get("audio_monitor"):
@@ -81,7 +95,9 @@ class AppController:
     def _start_pipeline(self) -> None:
         if self.pipeline is not None:
             self.pipeline.stop()
-        self.pipeline = AsrPipeline(self.config, self.queue)
+        self.pipeline = AsrPipeline(
+            self.config, self.queue, tracer=self._tracer
+        )
         self.pipeline.start()
 
     def _restart_pipeline_safe(self) -> None:
@@ -156,6 +172,13 @@ class AppController:
         if self.pipeline is not None:
             self.pipeline.stop()
             self.pipeline = None
+        if self._tracer is not None:
+            try:
+                path = self._tracer.flush()
+                print(f"[debug] trace guardado en {path}", flush=True)
+            except Exception as exc:
+                print(f"[debug] no se pudo guardar trace: {exc}", flush=True)
+            self._tracer = None
         if self.overlay is not None:
             overlay = self.overlay
             self.overlay = None

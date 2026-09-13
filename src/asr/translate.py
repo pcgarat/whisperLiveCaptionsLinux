@@ -53,6 +53,10 @@ class NllbCt2Translator:
     (alias de config: ``nllb-200-distilled-ct2``). Lazy-load vía huggingface_hub.
     """
 
+    _CPU_FALLBACK_NOTICE = (
+        "Traducción en CPU (CUDA no disponible). Puede ir más lenta."
+    )
+
     def __init__(
         self,
         model_id: str = NLLB_CT2_MODEL_ID,
@@ -62,6 +66,8 @@ class NllbCt2Translator:
         self.model_id = resolve_translator_model_id(model_id)
         self.device = device
         self.compute_type = compute_type
+        self.cpu_fallback = False
+        self._cpu_fallback_notice_pending = False
         self._translator: Any = None
         self._tokenizer: Any = None
         self._model_path: Path | None = None
@@ -69,6 +75,13 @@ class NllbCt2Translator:
     @property
     def is_loaded(self) -> bool:
         return self._translator is not None and self._tokenizer is not None
+
+    def take_cpu_fallback_notice(self) -> str | None:
+        """Devuelve el aviso una sola vez si hubo fallback CUDA→CPU."""
+        if not self._cpu_fallback_notice_pending:
+            return None
+        self._cpu_fallback_notice_pending = False
+        return self._CPU_FALLBACK_NOTICE
 
     def load(self) -> None:
         if self.is_loaded:
@@ -94,6 +107,8 @@ class NllbCt2Translator:
                     exc_info=True,
                 )
                 self.device = "cpu"
+                self.cpu_fallback = True
+                self._cpu_fallback_notice_pending = True
                 self._translator = ctranslate2.Translator(
                     str(self._model_path),
                     device="cpu",

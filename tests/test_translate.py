@@ -148,6 +148,37 @@ def test_nllb_translate_omits_ngram_when_zero() -> None:
     )
 
 
+def test_nllb_cuda_fallback_sets_notice(monkeypatch: Any) -> None:
+    t = NllbCt2Translator(device="cuda")
+    calls: list[str] = []
+
+    class _Tok:
+        @staticmethod
+        def from_file(_path: str) -> Any:
+            return object()
+
+    class _Ct2Translator:
+        def __init__(self, _path: str, device: str, compute_type: str) -> None:
+            calls.append(device)
+            if device == "cuda":
+                raise RuntimeError("no cuda")
+
+    monkeypatch.setattr(
+        "huggingface_hub.snapshot_download", lambda **_kwargs: "/tmp/fake-nllb"
+    )
+    monkeypatch.setattr("tokenizers.Tokenizer", _Tok)
+    monkeypatch.setattr("ctranslate2.Translator", _Ct2Translator)
+
+    t.load()
+    assert t.device == "cpu"
+    assert t.cpu_fallback is True
+    assert calls == ["cuda", "cpu"]
+    notice = t.take_cpu_fallback_notice()
+    assert notice is not None
+    assert "CPU" in notice
+    assert t.take_cpu_fallback_notice() is None
+
+
 def test_fake_translator_contract() -> None:
     fake = FakeTranslator()
     assert fake.translate("hi", "en", "es") == "[es]hi"

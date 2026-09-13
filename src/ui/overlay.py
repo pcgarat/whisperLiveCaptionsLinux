@@ -40,6 +40,9 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self._save_pos_timer = QtCore.QTimer(self)
         self._save_pos_timer.setSingleShot(True)
         self._save_pos_timer.timeout.connect(self._persist_geometry)
+        self._notice_timer = QtCore.QTimer(self)
+        self._notice_timer.setSingleShot(True)
+        self._notice_timer.timeout.connect(self._clear_notice)
         self._build_ui()
         self._apply_style()
         self._build_context_menu()
@@ -121,6 +124,12 @@ class SubtitleOverlay(QtWidgets.QWidget):
         top.addWidget(self.close_btn)
         panel_layout.addLayout(top)
 
+        self.notice_label = QtWidgets.QLabel("")
+        self.notice_label.setObjectName("noticeLabel")
+        self.notice_label.setWordWrap(True)
+        self.notice_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
+        self.notice_label.setVisible(False)
+
         self.translated_label = QtWidgets.QLabel("")
         self.translated_label.setWordWrap(True)
         self.translated_label.setAlignment(
@@ -140,6 +149,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self.partial_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
         self.partial_label.setObjectName("partialCaption")
 
+        panel_layout.addWidget(self.notice_label)
         panel_layout.addWidget(self.translated_label)
         panel_layout.addWidget(self.final_label)
         panel_layout.addWidget(self.partial_label)
@@ -149,6 +159,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
             self,
             self.panel,
             self.lang_label,
+            self.notice_label,
             self.translated_label,
             self.final_label,
             self.partial_label,
@@ -369,6 +380,11 @@ class SubtitleOverlay(QtWidgets.QWidget):
                 color: {partial_rgba};
                 font-size: 12px;
             }}
+            QLabel#noticeLabel {{
+                color: #ffd27a;
+                font-size: 12px;
+                font-weight: 600;
+            }}
             QPushButton#translateToggle {{
                 background: transparent;
                 color: {partial_rgba};
@@ -522,6 +538,18 @@ class SubtitleOverlay(QtWidgets.QWidget):
         if text.startswith(self._final_text) or not self._final_text.startswith(text):
             self._final_text = text
 
+    def _show_notice(self, message: str, *, duration_ms: int = 8000) -> None:
+        text = message.strip()
+        if not text:
+            return
+        self.notice_label.setText(text)
+        self.notice_label.setVisible(True)
+        self._notice_timer.start(max(1000, duration_ms))
+
+    def _clear_notice(self) -> None:
+        self.notice_label.setText("")
+        self.notice_label.setVisible(False)
+
     def _poll_queue(self) -> None:
         updated = False
         while True:
@@ -529,6 +557,11 @@ class SubtitleOverlay(QtWidgets.QWidget):
                 item = self.text_queue.get_nowait()
             except queue.Empty:
                 break
+            if item.notice:
+                self._show_notice(item.notice)
+            caption_payload = bool(item.text) or item.translated_text is not None
+            if not caption_payload:
+                continue
             if item.is_final:
                 if item.seq < self._caption_seq:
                     # Traducción tardía del mismo EN que aún se muestra.
