@@ -1,4 +1,4 @@
-.PHONY: help venv install run debug test lint format clean devices config-init check
+.PHONY: help venv install run debug test lint format clean devices config-init check install-user uninstall-user
 
 PYTHON ?= python3.12
 VENV   := .venv
@@ -57,6 +57,14 @@ config-init: ## Copia config.example.json → config.json si no existe
 		cp config.example.json config.json; \
 		echo "Creado config.json"; \
 	fi
+
+install-user: ## Instala en ~/.local con icono en el menú (Fase A)
+	@chmod +x scripts/install-user.sh scripts/uninstall-user.sh
+	@./scripts/install-user.sh
+
+uninstall-user: ## Quita install de usuario (PURGE_CONFIG=1 borra ~/.config/…)
+	@chmod +x scripts/uninstall-user.sh
+	@PURGE_CONFIG="$(PURGE_CONFIG)" ./scripts/uninstall-user.sh
 
 clean: ## Borra caches y el venv
 	rm -rf $(VENV) .pytest_cache .ruff_cache

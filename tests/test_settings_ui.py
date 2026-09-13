@@ -324,7 +324,19 @@ def test_app_preset_bar_disabled_without_controller(
     assert dlg.app_preset_save_btn.isEnabled() is False
     assert dlg.app_preset_save_as_btn.isEnabled() is False
     assert dlg.app_preset_delete_btn.isEnabled() is False
+    assert dlg.brand_logo.pixmap() is not None
+    assert not dlg.brand_logo.pixmap().isNull()
+    assert dlg.brand_logo.height() == 192
     dlg.close()
+
+
+def test_brand_logo_loads_from_assets(qapp: QtWidgets.QApplication) -> None:
+    from src.ui.branding import brand_logo_path, load_brand_logo_pixmap
+
+    assert brand_logo_path().is_file()
+    pm = load_brand_logo_pixmap(height=192, device_pixel_ratio=1.0)
+    assert not pm.isNull()
+    assert pm.height() == 192
 
 
 def test_app_preset_bar_save_as_and_guardar(
@@ -350,6 +362,19 @@ def test_app_preset_bar_save_as_and_guardar(
     dlg._save_app_preset()
     assert ctrl.saved == 1
     assert ctrl.cfg["app_presets"]["directo-es"]["font_size"] == 42
+    dlg.close()
+
+
+def test_app_preset_factory_delete_disabled(qapp: QtWidgets.QApplication) -> None:
+    from src.config import APP_PRESET_DEFAULT
+
+    ctrl = _FakeAppPresetController()
+    ctrl.cfg = validate_config({})
+    assert ctrl.cfg["app_preset"] == APP_PRESET_DEFAULT
+    dlg = SettingsDialog(None, ctrl.cfg, controller=ctrl)
+    assert dlg.app_preset.currentData() == APP_PRESET_DEFAULT
+    assert dlg.app_preset_save_btn.isEnabled() is True
+    assert dlg.app_preset_delete_btn.isEnabled() is False
     dlg.close()
 
 

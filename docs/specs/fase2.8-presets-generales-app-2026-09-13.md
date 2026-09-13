@@ -2,7 +2,7 @@
 
 # Spec: Fase 2.8 — Presets generales de aplicación
 
-**Estado:** aprobado (decisiones confirmadas 2026-09-13).  
+**Estado:** aprobado (decisiones confirmadas 2026-09-13; fábrica `default` 2026-09-13).  
 **Intent:** `docs/intent/fase2.8-presets-generales-app-2026-09-13.md`  
 **Base:** config unificada (`src/config.py`), Settings (`src/ui/settings.py`), apply path en `src/app.py`.
 
@@ -12,7 +12,7 @@ Permitir guardar, aplicar al instante y borrar **presets generales de usuario** 
 
 **Usuario:** solo el autor.
 
-**Success de producto:** recuperar una sesión tipificada (idioma/modelo/audio/latencia/TX/apariencia/ventanas) en un clic, y persistir esos presets entre reinicios.
+**Success de producto:** recuperar una sesión tipificada (idioma/modelo/audio/latencia/TX/apariencia/ventanas) en un clic, y persistir esos presets entre reinicios. Instalación nueva arranca con preset de fábrica `default` activo.
 
 ## Tech Stack
 
@@ -21,6 +21,7 @@ Sin dependencias nuevas. Reutilizar:
 | Pieza | Uso |
 |-------|-----|
 | `config.json` + `validate_config` | almacén de presets + blob snapshot |
+| `config.example.json` | defaults de primer arranque + snapshot fábrica `default` |
 | PyQt6 Settings | barra de presets encima del `QTabWidget` |
 | `AppController.open_settings` / hot-swap / restart | aplicar snapshot con la misma matriz ASR vs hot-swap |
 
@@ -28,17 +29,17 @@ Sin dependencias nuevas. Reutilizar:
 
 ```json
 {
-  "app_preset": null,
+  "app_preset": "default",
   "app_presets": {
-    "directo-es": { /* snapshot completo validate_config, sin meta */ }
+    "default": { /* snapshot completo validate_config, sin meta */ }
   }
 }
 ```
 
 | Clave | Tipo | Default | Notas |
 |-------|------|---------|-------|
-| `app_preset` | `string \| null` | `null` | Id del último preset aplicado/guardado; `null` = ninguno |
-| `app_presets` | `object` | `{}` | Mapa id → snapshot. **Sin fábrica.** |
+| `app_preset` | `string \| null` | `default` (`APP_PRESET_DEFAULT`) | Id del último preset aplicado/guardado; `null` = ninguno |
+| `app_presets` | `object` | `{ "default": <snapshot> }` | Mapa id → snapshot. Fábrica: solo `default` en install limpia |
 
 ### Qué entra en un snapshot
 
@@ -58,6 +59,16 @@ Al guardar un snapshot, **nunca** anidar `app_presets` dentro del blob. Al aplic
 - Slug: mismo criterio que presets TX (`[a-z0-9_-]`, minúsculas, no vacío).
 - Colisión: rechazar si el id ya existe en **Guardar como** (salvo que se implemente confirmación de sobrescritura; en v1: error y pedir otro nombre).
 - **Guardar** (sin “como”): sobrescribe el blob del `app_preset` activo; si `app_preset` es `null`, la acción está deshabilitada (obligar Guardar como…).
+- Id de fábrica: `default` (`APP_PRESET_DEFAULT`).
+
+### Snapshot de fábrica (`default`)
+
+Contenido = configuración de referencia del producto (misma que top-level en `config.example.json` / `_builtin_defaults`), con:
+
+- `audio_monitor` vacío (no atar a un monitor del autor).
+- `window_pos` / `settings_window_pos` = `null` (el WM coloca en primer uso).
+
+En instalación nueva / `load_config` sin fichero: `app_preset=default` y `app_presets` solo con esa entrada.
 
 ## Comportamiento
 
@@ -68,9 +79,9 @@ Barra **encima** de las pestañas (visible desde cualquier tab):
 1. Combo **Preset** — lista de ids en `app_presets` + entrada “(ninguno)” cuando `app_preset` es `null` o no hay presets.
 2. **Guardar** — enabled solo si hay `app_preset` activo presente en el mapa; escribe snapshot vivo encima.
 3. **Guardar como…** — diálogo de nombre → slug → crea entrada, la deja activa, aplica meta.
-4. **Borrar** — enabled solo si hay activo; confirma; elimina del mapa. Tras borrar: `app_preset = null` (combo “(ninguno)”); **no** auto-aplicar otro preset.
+4. **Borrar** — enabled solo si hay activo **y** no es `default`; confirma; elimina del mapa. Tras borrar: `app_preset = null` (combo “(ninguno)”); **no** auto-aplicar otro preset. El preset de fábrica `default` no se puede borrar (botón deshabilitado + `delete_app_preset` rechaza).
 
-Sin presets de fábrica. Sin renombrar en v1.
+Sin renombrar en v1.
 
 ### Aplicar al instante
 
@@ -78,100 +89,60 @@ Al cambiar el combo a un id existente:
 
 1. Construir config candidata = `validate_config({**snapshot, "app_presets": mapa_actual, "app_preset": id})`.
 2. Persistencia inmediata en `config.json` (no esperar al botón Guardar del diálogo).
-3. Aplicar a runtime con la misma clasificación que hoy en `open_settings`:
-   - Keys ASR-restart → reiniciar pipeline.
-   - Latencia / traducción → hot-swap.
-   - UI/apariencia/display → `overlay.apply_config`.
-   - Geometría overlay → restaurar pos/tamaño (clamp a pantallas).
-   - Geometría Settings → mover/redimensionar el diálogo abierto.
-4. Si `audio_monitor` del snapshot **no** está en la lista actual de monitores: conservar el monitor vivo actual, mostrar aviso no modal (o `QMessageBox` informativo), y seguir aplicando el resto.
+3. Aplicar al controller con la misma matriz ASR-restart / latency hot-swap / translation hot-swap que el Guardar de Settings.
+4. Recargar controles del diálogo Settings desde la config aplicada.
 5. Cambiar a “(ninguno)” **no** revierte config; solo pone `app_preset = null` y persiste meta (evita sorpresa de “deshacer”).
 
-### Guardar (sobrescribir)
+### Guardar
 
 1. Requiere `app_preset` ∈ `app_presets`.
 2. Sustituye `app_presets[id]` por snapshot vivo.
-3. Persiste de inmediato.
-4. No reinicia pipeline (solo escritura de biblioteca de presets).
 
 ### Guardar como…
 
-1. Nombre → slug; validar no vacío / no colisión.
+1. Nombre → slug; rechazar vacío / colisión.
 2. Inserta snapshot; `app_preset = slug`.
-3. Persiste de inmediato.
-4. Actualiza combo al nuevo id.
 
 ### Borrar
 
-1. Confirmación (“¿Borrar el preset «id»?”).
+1. Confirmación.
 2. Elimina entrada; `app_preset = null`.
-3. Persiste; no altera el resto de la config viva.
 
-### Relación con presets parciales
+## Relación con presets parciales
 
 `latency_profiles` y `translation_profiles` viajan **dentro** del snapshot. Los selectores de la pestaña Traducciones / Latencia siguen funcionando igual; un preset general es una capa superior.
 
-### Geometría
-
-Siempre incluida. Al aplicar:
-
-- Overlay: `window_pos/width/height` → `_restore_geometry` / clamp existente.
-- Settings: `settings_window_*` → `apply_saved_geometry`.
-- Si la posición queda fuera de pantallas → reclavar (comportamiento ya existente del overlay).
-
-## Project Structure (tocar)
+## Archivos
 
 ```
-src/config.py              # app_preset(s), snapshot helpers, slug, CRUD
+src/config.py              # app_preset(s), snapshot helpers, slug, CRUD, APP_PRESET_DEFAULT
 src/app.py                 # apply_app_preset / save paths + matriz restart
-src/ui/settings.py         # barra de presets + wiring
-src/ui/overlay.py          # solo si hace falta exponer geometría viva al snapshot
-config.example.json
-tests/test_config.py
-tests/test_settings_ui.py
-tests/test_app_presets.py  # nuevo: snapshot exclude meta, apply merge
-docs/intent|specs/fase2.8-…
-README.md                  # mención breve
-tasks/plan.md, tasks/todo.md
+src/ui/settings.py         # barra Preset general
+config.example.json        # defaults + único preset fábrica `default`
+tests/test_app_presets.py  # snapshot exclude meta, apply merge, defaults fábrica
 ```
 
-## Commands
-
-```bash
-make test
-make lint
-make run
-```
-
-## Code Style
-
-Helpers puros en `config.py` (como TX):
+## Pseudocódigo (núcleo)
 
 ```python
+APP_PRESET_DEFAULT = "default"
 APP_PRESET_META_KEYS = frozenset({"app_preset", "app_presets"})
-
-def snapshot_app_config(cfg: dict[str, Any]) -> dict[str, Any]:
-    """Copia validada sin meta de presets generales."""
-    ...
 
 def apply_app_preset(cfg: dict[str, Any], preset_id: str) -> dict[str, Any]:
     """Fusiona snapshot sobre cfg conservando app_presets; valida."""
-    ...
 ```
 
-- Deepcopy de profiles anidados.
-- UI: textos en español; sin comentarios obvios.
+## Tests
 
-## Testing Strategy
-
-| Nivel | Qué |
-|-------|-----|
+| Tipo | Caso |
+|------|------|
 | Unit | Snapshot excluye meta; apply conserva `app_presets`; slug/colisión |
 | Unit | Guardar / Guardar como / Borrar mutan el mapa y `app_preset` |
-| Unit | `validate_config` defaults `app_preset=null`, `app_presets={}` |
+| Unit | `validate_config({})` → `app_preset=default`, `app_presets` solo `{default}` |
 | UI (offscreen) | Combo lista ids; Guardar disabled sin activo; Guardar como añade |
 | Manual | Crear dos presets con geometría distinta; cambiar combo → overlay/settings saltan; reiniciar app |
 | Manual | Snapshot con monitor inexistente → aviso + resto aplicado |
+| Manual | Install limpia: solo `default` activo |
 
 ## Boundaries
 
@@ -179,11 +150,13 @@ def apply_app_preset(cfg: dict[str, Any], preset_id: str) -> dict[str, Any]:
 - Snapshot completo excepto `app_preset` / `app_presets`.
 - Geometría siempre incluida.
 - Aplicar al instante al cambiar combo; persistir meta al momento.
-- Sin fábrica; solo usuario.
+- Install limpia: único preset `default`, activo.
+- El preset de fábrica `default` no se puede borrar.
+- Fábrica no incluye `audio_monitor` ni posiciones de ventana del autor.
 - Misma matriz ASR-restart vs hot-swap que Settings Guardar.
 
 **Ask first:**
-- Presets de fábrica empaquetados.
+- Más presets de fábrica además de `default`.
 - Renombrar / export-import fichero.
 - Indicador dirty tras retocar.
 - Incluir/excluir geometría con toggle (decidido: siempre ON).
@@ -193,6 +166,7 @@ def apply_app_preset(cfg: dict[str, Any], preset_id: str) -> dict[str, Any]:
 - Cloud.
 - Borrar sin confirmación.
 - Al elegir “(ninguno)”, revertir automáticamente al estado anterior.
+- Embarcar monitores Bluetooth / rutas de audio del autor en `config.example.json`.
 
 ## Success Criteria
 
@@ -201,16 +175,18 @@ def apply_app_preset(cfg: dict[str, Any], preset_id: str) -> dict[str, Any]:
 3. Cambiar combo aplica al instante (UI + geometría + pipeline según matriz).
 4. Guardar sobrescribe el activo; Borrar pide confirmación y deja `(ninguno)`.
 5. Tras reinicio, mapa + `app_preset` se restauran; aplicar de nuevo funciona.
-6. `make test` / `make lint` verdes; README menciona presets generales.
+6. Primer arranque / config ausente: `app_preset=default` y mapa solo con `default`.
+7. `make test` / `make lint` verdes; README menciona presets generales y fábrica `default`.
 
 ## ASSUMPTIONS
 
 1. Nombre de fase **2.8** (siguiente a 2.7 apariencia).
-2. UI del combo muestra el **slug** (sin label display separado en v1).
+2. UI del combo muestra el **slug** (sin label display separado en v1) → se ve `default`.
 3. “(ninguno)” no es un preset almacenado; es UI para `app_preset is null`.
 4. Monitor ausente: conservar el actual + aviso; no abortar el apply completo.
 5. Tras Borrar, no se aplica otro preset automáticamente.
 6. Retocar knobs tras aplicar **no** limpia el combo en v1 (sin dirty); Guardar escribe el estado vivo encima del id activo.
+7. Migración de installs ya existentes: **no** se reescribe `config.json` del usuario; solo afecta installs nuevas / sin fichero.
 
 ---
 

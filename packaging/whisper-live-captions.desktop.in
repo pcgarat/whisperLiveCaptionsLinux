@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Version=1.0
+Name=Whisper Live Captions
+Comment=Subtítulos locales con Whisper (Linux)
+Exec=@EXEC@
+Icon=whisper-live-captions
+Terminal=false
+Categories=AudioVideo;Utility;
+StartupNotify=true

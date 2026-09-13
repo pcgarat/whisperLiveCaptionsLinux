@@ -456,7 +456,7 @@ Clamps decode: `beam_size` 1–8, `length_penalty` 0.6–1.5, `no_repeat_ngram_s
 | `padding`                        | `24`                  | 0–100 px           |
 | `text_align`                     | `center`              | `center`           |
 | `window_*` / `settings_window_*` | geometría             | Persistidos por UI |
-| `app_preset` / `app_presets`     | `traducción-independiente` / `{…}` | Snapshot de fábrica + mapa de presets |
+| `app_preset` / `app_presets`     | `default` / `{default: …}` | Snapshot de fábrica + mapa de presets |
 
 
 

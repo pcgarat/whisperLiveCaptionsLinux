@@ -95,6 +95,19 @@ def test_save_as_apply_overwrite_delete() -> None:
     assert deleted["language"] == "de"
 
 
+def test_delete_factory_default_rejected() -> None:
+    from src.config import APP_PRESET_DEFAULT
+
+    cfg = validate_config({})
+    assert cfg["app_preset"] == APP_PRESET_DEFAULT
+    try:
+        delete_app_preset(cfg, APP_PRESET_DEFAULT)
+        raise AssertionError("expected factory delete rejected")
+    except ValueError as exc:
+        assert "fábrica" in str(exc).lower()
+    assert APP_PRESET_DEFAULT in validate_config(cfg)["app_presets"]
+
+
 def test_save_as_rejects_collision() -> None:
     cfg = save_app_preset_as(validate_config({}), "estudio")
     try:

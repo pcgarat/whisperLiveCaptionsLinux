@@ -1,16 +1,23 @@
-# Plan: Fase 2.8 — Presets generales de aplicación
+# Plan: Empaquetado Linux — Fase A (+ B planificada)
 
-Spec: `docs/specs/fase2.8-presets-generales-app-2026-09-13.md`  
-Intent: `docs/intent/fase2.8-presets-generales-app-2026-09-13.md`  
-Rama: `feat/presets-generales-app`
+Spec: `docs/specs/packaging-install-desktop-2026-09-13.md`  
+Intent: `docs/intent/packaging-install-desktop-2026-09-13.md`  
+Rama: `feat/packaging-fase-a-install-desktop`
 
 ## Enfoque
 
-1. **Config:** `app_preset` / `app_presets` + helpers snapshot/apply/CRUD (sin meta recursiva).
-2. **AppController:** aplicar preset al instante con matriz restart/hot-swap + geometría; persistir.
-3. **Settings UI:** barra encima de tabs (combo, Guardar, Guardar como…, Borrar).
-4. **Tests + README** + smoke manual de geometría/monitor ausente.
+1. **Paths XDG** en config/app (testeable sin install real).
+2. **Assets** `packaging/` (desktop template, icono SVG, script install).
+3. **Make** `install-user` / `uninstall-user` + wrapper.
+4. **README** + smoke manual.
+5. **Fase B:** solo documentada en spec (no código en esta rama).
 
 ## Orden de slices
 
-Config (testeable) → apply en app → UI → docs/README.
+Paths/config → packaging assets + scripts → Make targets → README/tests finales.
+
+## Crítica / mejoras conscientes
+
+- Copiar a `~/.local/share/...` es más “producto” que apuntar el `.desktop` al clone; cuesta más disco (venv duplicado) pero desacopla del sitio del repo.
+- Alternativa rechazada en A: symlink al repo (frágil si mueves el clone).
+- En B, reutilizar el mismo `WLCL_*` evita dos modos de config.

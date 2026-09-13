@@ -19,6 +19,27 @@ chmod +x scripts/run.sh
 
 La primera ejecución crea `.venv`, instala dependencias y puede descargar el modelo Whisper (`medium` por defecto).
 
+## Instalación en el menú (Fase A)
+
+Instala una copia en `~/.local` con icono en Actividades / menú de aplicaciones (sin `sudo`):
+
+```bash
+make install-user
+```
+
+- Lanzador: `~/.local/bin/whisper-live-captions`
+- Menú: *Whisper Live Captions*
+- Config: `~/.config/whisper-live-captions/config.json` (independiente del `config.json` del repo)
+
+```bash
+make uninstall-user                 # quita app/icono; conserva config
+make uninstall-user PURGE_CONFIG=1  # también borra la config XDG
+```
+
+`make run` en el clon del repo sigue usando el `config.json` del directorio de trabajo (modo desarrollo).
+
+**Fase B (planificada):** paquete `.deb` system-wide (`/opt` + `/usr/share/applications`). Ver `docs/specs/packaging-install-desktop-2026-09-13.md`.
+
 ## Uso
 
 1. Reproduce audio en inglés (navegador o reproductor).
@@ -35,7 +56,7 @@ El toggle de traducción hace **hot-swap** del traductor (no recarga Whisper).
 
 En Settings, barra **Preset general** (encima de las pestañas):
 
-- Al instalar hay un preset de fábrica: `traducción-independiente` (EN→ES con NLLB sticky).
+- Al instalar hay un preset de fábrica: `default` (EN→ES con NLLB sticky; misma config de referencia del producto). Queda activo en el primer arranque y no se puede borrar.
 - **Guardar como…** crea más snapshots de *toda* la config (captura, latencia, traducción, apariencia, geometría).
 - **Guardar** sobrescribe el preset activo con el estado actual.
 - **Borrar** elimina el preset (con confirmación); no revierte la config viva.

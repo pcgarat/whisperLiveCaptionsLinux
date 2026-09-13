@@ -13,6 +13,7 @@ from src.asr.languages import (
 )
 from src.audio.devices import list_audio_monitors
 from src.config import (
+    APP_PRESET_DEFAULT,
     LATENCY_FACTORY_PRESETS,
     SECOND_LINE_MODES,
     TEXT_ALIGN_LABELS,
@@ -31,6 +32,7 @@ from src.config import (
     translation_user_preset_ids,
     validate_config,
 )
+from src.ui.branding import load_brand_logo_pixmap, repo_or_app_root
 
 HINT_LATENCY_MODE = (
     "Estable prioriza texto limpio. Baja latencia responde antes y admite más parpadeo. "
@@ -142,6 +144,11 @@ QLabel#DialogTitle {
 QLabel#DialogSubtitle {
     color: #8b93a7;
     font-size: 12px;
+}
+QLabel#BrandLogo {
+    background: transparent;
+    border: none;
+    padding: 0;
 }
 QToolTip {
     background-color: #1c1f27;
@@ -372,6 +379,73 @@ QTabBar::tab:hover:!selected {
     color: #e8b86d;
 }
 """
+
+
+# Wordmark en el hueco libre de presets: centrado; tamaño de lectura de marca.
+BRAND_LOGO_HEIGHT = 192
+BRAND_LOGO_MAX_WIDTH = 480
+
+
+def _brand_logo_label(parent: QtWidgets.QWidget | None = None) -> QtWidgets.QLabel:
+    """Wordmark LIVE CAPTIONS PGL, centrado en el hueco de presets."""
+    lab = QtWidgets.QLabel(parent)
+    lab.setObjectName("BrandLogo")
+    lab.setAlignment(
+        QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter
+    )
+    dpr = float(lab.devicePixelRatioF())
+    pm = load_brand_logo_pixmap(height=BRAND_LOGO_HEIGHT, device_pixel_ratio=dpr)
+    if pm.isNull():
+        lab.setText("LIVE CAPTIONS")
+        lab.setStyleSheet(
+            "color: #e8b86d; font-size: 14px; font-weight: 700; letter-spacing: 1.2px;"
+        )
+        lab.setAlignment(
+            QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter
+        )
+        return lab
+    lab.setPixmap(pm)
+    logical_w = int(round(pm.width() / max(pm.devicePixelRatio(), 1.0)))
+    lab.setFixedSize(min(logical_w, BRAND_LOGO_MAX_WIDTH), BRAND_LOGO_HEIGHT)
+    lab.setScaledContents(False)
+    lab.setSizePolicy(
+        QtWidgets.QSizePolicy.Policy.Fixed,
+        QtWidgets.QSizePolicy.Policy.Fixed,
+    )
+    lab.setToolTip("LIVE CAPTIONS PGL")
+    return lab
+
+
+def _preset_controls_with_brand(
+    controls: QtWidgets.QWidget,
+    logo: QtWidgets.QLabel,
+) -> QtWidgets.QWidget:
+    """Controles a la izquierda; wordmark centrado en el hueco restante."""
+    wrap = QtWidgets.QWidget()
+    wrap.setSizePolicy(
+        QtWidgets.QSizePolicy.Policy.Expanding,
+        QtWidgets.QSizePolicy.Policy.Preferred,
+    )
+    row = QtWidgets.QHBoxLayout(wrap)
+    row.setContentsMargins(0, 0, 0, 0)
+    row.setSpacing(0)
+    row.addWidget(
+        controls,
+        stretch=0,
+        alignment=QtCore.Qt.AlignmentFlag.AlignLeft
+        | QtCore.Qt.AlignmentFlag.AlignVCenter,
+    )
+    # Dos stretches iguales → centro horizontal del hueco libre.
+    row.addStretch(1)
+    row.addWidget(
+        logo,
+        stretch=0,
+        alignment=QtCore.Qt.AlignmentFlag.AlignHCenter
+        | QtCore.Qt.AlignmentFlag.AlignVCenter,
+    )
+    row.addStretch(1)
+    wrap.setMinimumHeight(max(CONTROL_HEIGHT, BRAND_LOGO_HEIGHT))
+    return wrap
 
 
 CONTROL_HEIGHT = 32
@@ -868,6 +942,14 @@ class SettingsDialog(QtWidgets.QDialog):
         self.setMinimumHeight(640)
         self.setStyleSheet(_SETTINGS_QSS)
         self._controller = controller
+        icon_path = (
+            repo_or_app_root()
+            / "packaging"
+            / "icons"
+            / "whisper-live-captions-128.png"
+        )
+        if icon_path.is_file():
+            self.setWindowIcon(QtGui.QIcon(str(icon_path)))
 
         self._config = dict(config)
         if not isinstance(self._config.get("latency_profiles"), dict):
@@ -893,6 +975,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         tabs = QtWidgets.QTabWidget()
         tabs.addTab(self._build_general_tab(config), "General")
+        tabs.addTab(self._build_latency_tab(config), "Latencia")
         tabs.addTab(self._build_appearance_tab(config), "Apariencia")
         tabs.addTab(self._build_translation_tab(config), "Traducciones")
         root.addWidget(tabs, stretch=1)
@@ -957,14 +1040,16 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         self.app_preset_delete_btn.clicked.connect(self._delete_app_preset)
 
-        bar.add_row(
-            "Activo",
-            _combo_actions_row(
-                self.app_preset,
-                self.app_preset_save_btn,
-                self.app_preset_save_as_btn,
-                self.app_preset_delete_btn,
-            ),
+        controls = _combo_actions_row(
+            self.app_preset,
+            self.app_preset_save_btn,
+            self.app_preset_save_as_btn,
+            self.app_preset_delete_btn,
+        )
+        self.brand_logo = _brand_logo_label(bar)
+        bar.body.addRow(
+            _field_label("Activo"),
+            _preset_controls_with_brand(controls, self.brand_logo),
         )
 
         if self._controller is None:
@@ -991,8 +1076,17 @@ class SettingsDialog(QtWidgets.QDialog):
                 self._config.get("app_presets") or {}
             )
             can_edit = self._controller is not None
+            can_delete = (
+                can_edit and has_active and current != APP_PRESET_DEFAULT
+            )
             self.app_preset_save_btn.setEnabled(can_edit and has_active)
-            self.app_preset_delete_btn.setEnabled(can_edit and has_active)
+            self.app_preset_delete_btn.setEnabled(can_delete)
+            if current == APP_PRESET_DEFAULT:
+                self.app_preset_delete_btn.setToolTip(
+                    "El preset de fábrica no se puede borrar"
+                )
+            else:
+                self.app_preset_delete_btn.setToolTip("Borrar")
             self.app_preset_save_as_btn.setEnabled(can_edit)
             self.app_preset.setEnabled(can_edit)
         finally:
@@ -1028,6 +1122,13 @@ class SettingsDialog(QtWidgets.QDialog):
             return
         preset_id = self._config.get("app_preset")
         if not preset_id:
+            return
+        if preset_id == APP_PRESET_DEFAULT:
+            QtWidgets.QMessageBox.information(
+                self,
+                "Borrar preset",
+                f"El preset de fábrica «{APP_PRESET_DEFAULT}» no se puede borrar.",
+            )
             return
         box = QtWidgets.QMessageBox(self)
         box.setIcon(QtWidgets.QMessageBox.Icon.Warning)
@@ -1283,6 +1384,30 @@ class SettingsDialog(QtWidgets.QDialog):
             capture.body.addRow("", err)
         body_layout.addWidget(capture)
 
+        captions = _Section("Subtítulos")
+        self.captions_show_partials = MarqueeToggle("Mostrar texto parcial")
+        self.captions_show_partials.setChecked(
+            bool(config.get("captions_show_partials", False))
+        )
+        captions.body.addRow(
+            _with_side_hint(self.captions_show_partials, HINT_SHOW_PARTIALS)
+        )
+        self.captions_allow_rewrite = MarqueeToggle(
+            "Permitir reescritura de lo ya mostrado"
+        )
+        self.captions_allow_rewrite.setChecked(
+            bool(config.get("captions_allow_rewrite", True))
+        )
+        captions.body.addRow(
+            _with_side_hint(self.captions_allow_rewrite, HINT_ALLOW_REWRITE)
+        )
+        body_layout.addWidget(captions)
+        body_layout.addStretch(1)
+        return self._wrap_scroll(body)
+
+    def _build_latency_tab(self, config: dict[str, Any]) -> QtWidgets.QWidget:
+        body, body_layout = self._new_tab_body()
+
         latency = _Section("Latencia")
         self.latency_mode = QtWidgets.QComboBox()
         self.latency_mode.addItem("Estable — más preciso", "stable")
@@ -1325,25 +1450,6 @@ class SettingsDialog(QtWidgets.QDialog):
         latency.add_row("Techo (s)", lat_wrap, HINT_MAX_LATENCY)
         self.max_latency.valueChanged.connect(self._on_max_latency_changed)
         body_layout.addWidget(latency)
-
-        captions = _Section("Subtítulos")
-        self.captions_show_partials = MarqueeToggle("Mostrar texto parcial")
-        self.captions_show_partials.setChecked(
-            bool(config.get("captions_show_partials", False))
-        )
-        captions.body.addRow(
-            _with_side_hint(self.captions_show_partials, HINT_SHOW_PARTIALS)
-        )
-        self.captions_allow_rewrite = MarqueeToggle(
-            "Permitir reescritura de lo ya mostrado"
-        )
-        self.captions_allow_rewrite.setChecked(
-            bool(config.get("captions_allow_rewrite", True))
-        )
-        captions.body.addRow(
-            _with_side_hint(self.captions_allow_rewrite, HINT_ALLOW_REWRITE)
-        )
-        body_layout.addWidget(captions)
         body_layout.addStretch(1)
         return self._wrap_scroll(body)
 
