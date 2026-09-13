@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 from copy import deepcopy
 from pathlib import Path
 from typing import Any
@@ -46,13 +47,16 @@ TRANSLATION_STICKY_LABELS: dict[str, str] = {
 }
 
 # Preset general de fábrica (snapshot en config.example.json).
-APP_PRESET_DEFAULT = "traducción-independiente"
+APP_PRESET_DEFAULT = "default"
 
 # Meta de presets generales: no se anidan dentro de cada snapshot.
 APP_PRESET_META_KEYS = frozenset({"app_preset", "app_presets"})
 
 CONFIG_NAME = "config.json"
 CONFIG_EXAMPLE_NAME = "config.example.json"
+APP_ID = "whisper-live-captions"
+ENV_APP_ROOT = "WLCL_APP_ROOT"
+ENV_CONFIG_DIR = "WLCL_CONFIG_DIR"
 
 
 def _builtin_defaults() -> dict[str, Any]:
@@ -103,7 +107,7 @@ def _builtin_defaults() -> dict[str, Any]:
         "window_height": 170,
         "settings_window_pos": None,
         "settings_window_width": 858,
-        "settings_window_height": 992,
+        "settings_window_height": 920,
         "opt_prefer_low_latency": False,
         "opt_prefer_fast_translation": False,
         "opt_nllb_on_cpu": False,
@@ -119,10 +123,45 @@ def _builtin_defaults() -> dict[str, Any]:
     }
 
 
+def resolve_app_root() -> Path | None:
+    """Raíz de la app instalada (`WLCL_APP_ROOT`), o None en modo desarrollo."""
+    raw = str(os.environ.get(ENV_APP_ROOT, "") or "").strip()
+    if not raw:
+        return None
+    return Path(raw).expanduser().resolve()
+
+
+def resolve_config_dir() -> Path:
+    """Dir de config: XDG si instalada; cwd en desarrollo."""
+    raw = str(os.environ.get(ENV_CONFIG_DIR, "") or "").strip()
+    if raw:
+        return Path(raw).expanduser().resolve()
+    if resolve_app_root() is not None:
+        xdg = str(os.environ.get("XDG_CONFIG_HOME", "") or "").strip()
+        base = Path(xdg).expanduser() if xdg else Path.home() / ".config"
+        return (base / APP_ID).resolve()
+    return Path.cwd().resolve()
+
+
+def resolve_config_path() -> Path:
+    return resolve_config_dir() / CONFIG_NAME
+
+
+def resolve_example_config_path() -> Path:
+    """`config.example.json` junto a la app instalada o a la raíz del repo."""
+    app_root = resolve_app_root()
+    if app_root is not None:
+        return app_root / CONFIG_EXAMPLE_NAME
+    return Path(__file__).resolve().parent.parent / CONFIG_EXAMPLE_NAME
+
+
 def _shipped_defaults() -> dict[str, Any]:
-    """Defaults = config.example.json del repo cuando existe."""
+    """Defaults = config.example.json del repo/install cuando existe."""
     base = _builtin_defaults()
-    example = Path(__file__).resolve().parent.parent / CONFIG_EXAMPLE_NAME
+    example = resolve_example_config_path()
+    if not example.is_file():
+        # Fallback: ejemplo junto al paquete src/ (install o repo).
+        example = Path(__file__).resolve().parent.parent / CONFIG_EXAMPLE_NAME
     if not example.is_file():
         return base
     try:
@@ -140,13 +179,15 @@ DEFAULTS: dict[str, Any] = _shipped_defaults()
 
 
 def default_config_path(root: Path | None = None) -> Path:
-    base = root or Path.cwd()
-    return base / CONFIG_NAME
+    if root is not None:
+        return Path(root) / CONFIG_NAME
+    return resolve_config_path()
 
 
 def default_example_config_path(root: Path | None = None) -> Path:
-    base = root or Path.cwd()
-    return base / CONFIG_EXAMPLE_NAME
+    if root is not None:
+        return Path(root) / CONFIG_EXAMPLE_NAME
+    return resolve_example_config_path()
 
 
 def _clamp(value: float, low: float, high: float) -> float:
@@ -550,7 +591,10 @@ def save_app_preset_as(
 def delete_app_preset(
     cfg: dict[str, Any], preset_id: str | None = None
 ) -> dict[str, Any]:
-    """Borra un preset de usuario y deja app_preset en null."""
+    """Borra un preset de usuario y deja app_preset en null.
+
+    El preset de fábrica (`APP_PRESET_DEFAULT`) no se puede borrar.
+    """
     out = validate_config(deepcopy(cfg))
     presets = deepcopy(out.get("app_presets") or {})
     if not isinstance(presets, dict):
@@ -561,6 +605,10 @@ def delete_app_preset(
     key = _normalize_app_preset_id(requested, presets)
     if key is None:
         raise ValueError(f"Preset desconocido: {str(requested).strip()}")
+    if key == APP_PRESET_DEFAULT:
+        raise ValueError(
+            f"El preset de fábrica «{APP_PRESET_DEFAULT}» no se puede borrar"
+        )
     del presets[key]
     out["app_presets"] = presets
     out["app_preset"] = None
@@ -674,6 +722,7 @@ def load_config(path: Path | None = None) -> dict[str, Any]:
 def save_config(cfg: dict[str, Any], path: Path | None = None) -> Path:
     config_path = path or default_config_path()
     validated = validate_config(cfg)
+    config_path.parent.mkdir(parents=True, exist_ok=True)
     with config_path.open("w", encoding="utf-8") as fh:
         json.dump(validated, fh, indent=2, ensure_ascii=False)
         fh.write("\n")

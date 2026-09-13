@@ -10,7 +10,7 @@ from pathlib import Path
 # WindowStaysOnTopHint / _NET_WM_STATE_ABOVE, como el menú de Chrome.
 os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
-from PyQt6 import QtCore, QtWidgets
+from PyQt6 import QtCore, QtGui, QtWidgets
 
 from src.asr.pipeline import AsrPipeline
 from src.asr.types import CaptionUpdate
@@ -19,6 +19,8 @@ from src.config import (
     apply_app_preset,
     delete_app_preset,
     load_config,
+    resolve_app_root,
+    resolve_config_path,
     save_app_preset,
     save_app_preset_as,
     save_config,
@@ -61,8 +63,8 @@ _DISPLAY_KEYS = (
 
 class AppController:
     def __init__(self) -> None:
-        self.root = Path.cwd()
-        self.config_path = self.root / "config.json"
+        self.root = resolve_app_root() or Path.cwd()
+        self.config_path = resolve_config_path()
         self.config = load_config(self.config_path)
         self._ensure_audio_device()
         self.queue: queue.Queue[CaptionUpdate] = queue.Queue()
@@ -93,6 +95,18 @@ class AppController:
     def start(self) -> int:
         qt_app = QtWidgets.QApplication(sys.argv)
         qt_app.setQuitOnLastWindowClosed(True)
+        qt_app.setApplicationName("Whisper Live Captions")
+        qt_app.setDesktopFileName("whisper-live-captions")
+        from src.ui.branding import repo_or_app_root
+
+        icon_path = (
+            repo_or_app_root()
+            / "packaging"
+            / "icons"
+            / "whisper-live-captions-128.png"
+        )
+        if icon_path.is_file():
+            qt_app.setWindowIcon(QtGui.QIcon(str(icon_path)))
 
         self.overlay = SubtitleOverlay(
             text_queue=self.queue,
