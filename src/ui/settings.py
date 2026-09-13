@@ -5,6 +5,12 @@ from typing import Any
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from src.asr.languages import (
+    AVAILABLE_LANGUAGES,
+    language_label,
+    merge_installed_languages,
+    pending_languages,
+)
 from src.audio.devices import list_audio_monitors
 from src.config import (
     LATENCY_FACTORY_PRESETS,
@@ -22,6 +28,49 @@ TOOLTIP_MAX_LATENCY = (
 )
 
 
+class InstallLanguagesDialog(QtWidgets.QDialog):
+    def __init__(
+        self,
+        parent: QtWidgets.QWidget | None,
+        installed: list[str],
+    ) -> None:
+        super().__init__(parent)
+        self.setWindowTitle("Instalar idiomas")
+        self.setModal(True)
+        self._installed = list(installed)
+        self._checks: dict[str, QtWidgets.QCheckBox] = {}
+
+        layout = QtWidgets.QVBoxLayout(self)
+        layout.addWidget(
+            QtWidgets.QLabel("Marca los idiomas a añadir a los selectores:")
+        )
+
+        pending = pending_languages(self._installed)
+        if not pending:
+            layout.addWidget(
+                QtWidgets.QLabel("Todos los idiomas del catálogo ya están instalados.")
+            )
+        else:
+            for code in pending:
+                box = QtWidgets.QCheckBox(language_label(code))
+                self._checks[code] = box
+                layout.addWidget(box)
+
+        buttons = QtWidgets.QDialogButtonBox()
+        self.install_btn = buttons.addButton(
+            "Instalar seleccionados",
+            QtWidgets.QDialogButtonBox.ButtonRole.AcceptRole,
+        )
+        buttons.addButton(QtWidgets.QDialogButtonBox.StandardButton.Cancel)
+        self.install_btn.setEnabled(bool(pending))
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+
+    def selected_codes(self) -> list[str]:
+        return [code for code, box in self._checks.items() if box.isChecked()]
+
+
 class SettingsDialog(QtWidgets.QDialog):
     def __init__(self, parent: QtWidgets.QWidget | None, config: dict[str, Any]) -> None:
         super().__init__(parent)
@@ -35,8 +84,17 @@ class SettingsDialog(QtWidgets.QDialog):
         layout.setSpacing(12)
 
         layout.addWidget(QtWidgets.QLabel("Idioma (manual):"))
-        self.language = QtWidgets.QLineEdit(str(config.get("language", "en")))
-        layout.addWidget(self.language)
+        lang_row = QtWidgets.QHBoxLayout()
+        self.language = QtWidgets.QComboBox()
+        lang_row.addWidget(self.language, stretch=1)
+        self.install_langs_btn = QtWidgets.QPushButton("Instalar nuevos…")
+        self.install_langs_btn.setToolTip(
+            "Añade idiomas del catálogo a los selectores de Settings y del overlay."
+        )
+        self.install_langs_btn.clicked.connect(self._install_languages)
+        lang_row.addWidget(self.install_langs_btn)
+        layout.addLayout(lang_row)
+        self._refresh_language_combo(str(config.get("language", "en")))
 
         layout.addWidget(QtWidgets.QLabel("Modelo Whisper:"))
         self.model = QtWidgets.QComboBox()
@@ -153,13 +211,12 @@ class SettingsDialog(QtWidgets.QDialog):
         )
         layout.addWidget(self.show_asr_line)
 
-        langs = config.get("installed_languages") or ["en", "es"]
-        lang_note = QtWidgets.QLabel(
-            "Idiomas instalados (overlay clicable): "
-            + ", ".join(str(x).upper() for x in langs)
+        catalog_note = QtWidgets.QLabel(
+            "Catálogo disponible: "
+            + ", ".join(f"{AVAILABLE_LANGUAGES[c]} ({c})" for c in AVAILABLE_LANGUAGES)
         )
-        lang_note.setWordWrap(True)
-        layout.addWidget(lang_note)
+        catalog_note.setWordWrap(True)
+        layout.addWidget(catalog_note)
 
         buttons = QtWidgets.QDialogButtonBox(
             QtWidgets.QDialogButtonBox.StandardButton.Save
@@ -171,6 +228,41 @@ class SettingsDialog(QtWidgets.QDialog):
 
         self._loading_profile = False
         self._load_profile_into_sliders(str(self.latency_mode.currentData()))
+
+    def _installed_languages(self) -> list[str]:
+        raw = self._config.get("installed_languages") or ["en", "es"]
+        if not isinstance(raw, list):
+            return ["en", "es"]
+        return merge_installed_languages(raw, [])
+
+    def _refresh_language_combo(self, preferred: str | None = None) -> None:
+        current = preferred
+        if current is None and self.language.count() > 0:
+            current = str(self.language.currentData() or "")
+        if not current:
+            current = str(self._config.get("language", "en"))
+        installed = self._installed_languages()
+        if current not in installed:
+            installed = merge_installed_languages(installed, [current])
+            self._config["installed_languages"] = installed
+        self.language.blockSignals(True)
+        self.language.clear()
+        for code in installed:
+            self.language.addItem(language_label(code), code)
+        idx = self.language.findData(current)
+        self.language.setCurrentIndex(idx if idx >= 0 else 0)
+        self.language.blockSignals(False)
+
+    def _install_languages(self) -> None:
+        dlg = InstallLanguagesDialog(self, self._installed_languages())
+        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+            return
+        selected = dlg.selected_codes()
+        if not selected:
+            return
+        merged = merge_installed_languages(self._installed_languages(), selected)
+        self._config["installed_languages"] = merged
+        self._refresh_language_combo()
 
     def _current_mode(self) -> str:
         data = self.latency_mode.currentData()
@@ -236,10 +328,13 @@ class SettingsDialog(QtWidgets.QDialog):
 
     def result_config(self) -> dict[str, Any]:
         self._write_sliders_to_profile()
+        lang = str(self.language.currentData() or "en").strip().lower() or "en"
+        installed = merge_installed_languages(self._installed_languages(), [lang])
         cfg = dict(self._config)
         cfg.update(
             {
-                "language": self.language.text().strip().lower() or "en",
+                "language": lang,
+                "installed_languages": installed,
                 "model": self.model.currentText(),
                 "audio_monitor": self.audio.currentText(),
                 "latency_mode": self._current_mode(),
