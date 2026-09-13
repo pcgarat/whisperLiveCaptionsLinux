@@ -22,16 +22,20 @@ class CaptionUpdate:
     language: str
     ts_mono: float
     translated_text: str | None = None
+    seq: int = 0
+    translation_append: bool = False
 ```
 
 - `is_final=True`: texto confirmado (LocalAgreement).
-- `translated_text`: ES confirmado si traducción ON; la UI solo actualiza la línea ES cuando no es `None`.
+- `translated_text`: ES confirmado si traducción ON; la UI solo actualiza la línea ES cuando no es `None` **y** `seq` sigue siendo el de la frase en pantalla.
+- `seq`: id monotónico por confirmación; traducciones tardías con `seq` menor se descartan.
+- `translation_append`: delta a concatenar (no re-traducir todo el committed).
 - Parcial: más discreto en UI; no bloquear el event loop al pintar.
 
 ## Streaming
 
 - Política en `src/asr/streaming.py` (LocalAgreement propia).
-- Traducción: protocol `Translator` en `src/asr/translate.py` (Null / NLLB CT2); solo sobre confirmados.
+- Traducción: protocol `Translator` en `src/asr/translate.py` (Null / NLLB CT2); solo sobre confirmados; worker async con coalescing (`tx-worker`).
 - `latency_mode` en config (`stable` | `low`).
 
 ## Errores

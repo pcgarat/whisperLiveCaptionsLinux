@@ -2,7 +2,7 @@
 
 # Spec: Fase 2.2 — Traducción EN→ES
 
-**Estado:** aprobado (2026-09-13); enmienda segunda línea (selector).  
+**Estado:** aprobado (2026-09-13); enmienda segunda línea (selector); enmienda anti-pisado ES (2026-09-13).  
 **Intent:** `docs/intent/fase2.2-traduccion-en-es-2026-09-13.md`  
 **Base:** Fase 1 + 2.1 (`docs/specs/fase2.1-baja-latencia-2026-09-13.md`)  
 **Skill de diseño:** `.cursor/skills/add-translation-phase/SKILL.md`
@@ -90,12 +90,22 @@ class CaptionUpdate:
     language: str             # fuente elegida
     ts_mono: float
     translated_text: str | None = None  # ES si aplica; solo con is_final relevante
+    seq: int = 0              # id monotónico por confirmación
+    translation_append: bool = False  # delta ES a concatenar
 ```
 
 La UI:
 - actualiza línea ASR desde `text` / parciales como ahora;
-- actualiza línea ES solo cuando `translated_text` no es `None` (típicamente en updates finales).
+- actualiza línea ES solo cuando `translated_text` no es `None` **y** `seq` es el de la frase aún en pantalla (descarta traducciones/revisiones tardías);
+- si `translation_append`, concatena el delta en lugar de sustituir toda la línea ES.
 
+### Traducción incremental (enmienda anti-pisado)
+
+- Traducir solo el **delta** confirmado respecto a la última base ya traducida, no re-traducir todo el buffer cuando el worker va al día.
+- Emitir el final ASR **antes** de NLLB; la traducción corre en un **worker async** (`tx-worker`).
+- **Coalescing:** si llegan confirmaciones nuevas mientras se traduce, se descarta el resultado intermedio y se traduce el span desde la última base hasta el `committed` más reciente (un solo decode cubre el hueco).
+- La UI aplica ES solo si `seq` sigue en pantalla.
+- Ignorar confirmaciones que **acortan** el texto ya emitido (rewind de LocalAgreement / solape post-trim).
 ## Project Structure (tocar)
 
 ```
