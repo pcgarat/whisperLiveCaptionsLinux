@@ -221,6 +221,7 @@ def test_emit_committed_translates_delta_and_appends_flag() -> None:
             "translation_enabled": True,
             "language": "en",
             "translation_target": "es",
+            "translation_sticky_mode": "off",
             "device": "cpu",
         }
     )
@@ -260,6 +261,7 @@ def test_emit_committed_shorten_still_emits_and_allows_growth() -> None:
             "translation_enabled": True,
             "language": "en",
             "translation_target": "es",
+            "translation_sticky_mode": "off",
             "device": "cpu",
         }
     )
@@ -297,6 +299,7 @@ def test_emit_committed_no_rewrite_skips_shrink_and_divergent() -> None:
             "translation_enabled": True,
             "language": "en",
             "translation_target": "es",
+            "translation_sticky_mode": "off",
             "captions_allow_rewrite": False,
             "device": "cpu",
         }
@@ -348,6 +351,7 @@ def test_tx_worker_coalesces_to_latest_span() -> None:
             "translation_enabled": True,
             "language": "en",
             "translation_target": "es",
+            "translation_sticky_mode": "off",
             "device": "cpu",
         }
     )

@@ -45,8 +45,8 @@ TRANSLATION_STICKY_LABELS: dict[str, str] = {
     "partials": "Sticky + parciales",
 }
 
-APP_PRESET_WHISPER = "Traduccion con Whisper"
-APP_PRESET_NLLB = "Traduccion NLLB-200-Distilled-CT2"
+# Preset general de fábrica (snapshot en config.example.json).
+APP_PRESET_DEFAULT = "traducción-independiente"
 
 # Meta de presets generales: no se anidan dentro de cada snapshot.
 APP_PRESET_META_KEYS = frozenset({"app_preset", "app_presets"})
@@ -57,9 +57,9 @@ CONFIG_EXAMPLE_NAME = "config.example.json"
 
 def _builtin_defaults() -> dict[str, Any]:
     """Fallback si no hay config.example.json (p. ej. empaquetado mínimo)."""
-    return {
-        "language": "es",
-        "model": "medium",
+    snap = {
+        "language": "en",
+        "model": "small",
         "compute_type": "float16",
         "device": "cuda",
         "audio_monitor": "",
@@ -74,19 +74,19 @@ def _builtin_defaults() -> dict[str, Any]:
             },
             "low": {
                 "agreement_n": 1,
-                "max_latency_sec": 0.35,
+                "max_latency_sec": 1.5,
                 "min_chunk_seconds": 0.35,
             },
         },
         "installed_languages": list(AVAILABLE_LANGUAGES.keys()),
-        "translation_enabled": False,
+        "translation_enabled": True,
         "translation_target": "es",
-        "translation_sticky_mode": "off",
+        "translation_sticky_mode": "committed",
         "second_line_mode": "none",
         "captions_show_partials": False,
         "captions_allow_rewrite": True,
         "translator_model": "nllb-200-distilled-ct2",
-        "translation_decode_preset": "balanced",
+        "translation_decode_preset": "custom",
         "translation_profiles": {
             **deepcopy(TRANSLATION_FACTORY_PRESETS),
             "custom": deepcopy(TRANSLATION_FACTORY_PRESETS["balanced"]),
@@ -95,7 +95,7 @@ def _builtin_defaults() -> dict[str, Any]:
         "font_size": 26,
         "font_color": "#ffffff",
         "bg_color": "#000000",
-        "bg_alpha": 0.41,
+        "bg_alpha": 0.6,
         "padding": 20,
         "text_align": "left",
         "window_pos": None,
@@ -104,8 +104,18 @@ def _builtin_defaults() -> dict[str, Any]:
         "settings_window_pos": None,
         "settings_window_width": 858,
         "settings_window_height": 992,
-        "app_preset": APP_PRESET_WHISPER,
-        "app_presets": {},
+        "opt_prefer_low_latency": False,
+        "opt_prefer_fast_translation": False,
+        "opt_nllb_on_cpu": False,
+        "opt_tx_delta_only": True,
+        "opt_tx_coalesce_emit": True,
+        "opt_perf_metrics": True,
+        "opt_short_caption_beam_cap": True,
+    }
+    return {
+        **deepcopy(snap),
+        "app_preset": APP_PRESET_DEFAULT,
+        "app_presets": {APP_PRESET_DEFAULT: deepcopy(snap)},
     }
 
 
@@ -486,9 +496,9 @@ def apply_app_preset(cfg: dict[str, Any], preset_id: str | None) -> dict[str, An
         out["app_preset"] = None
         out["app_presets"] = presets
         return validate_config(out)
-    key = str(preset_id).strip().lower()
-    if key not in presets:
-        raise ValueError(f"Preset desconocido: {key}")
+    key = _normalize_app_preset_id(preset_id, presets)
+    if key is None:
+        raise ValueError(f"Preset desconocido: {str(preset_id).strip()}")
     merged = {
         **deepcopy(presets[key]),
         "app_presets": presets,
@@ -542,12 +552,15 @@ def delete_app_preset(
 ) -> dict[str, Any]:
     """Borra un preset de usuario y deja app_preset en null."""
     out = validate_config(deepcopy(cfg))
-    key = str(preset_id or out.get("app_preset") or "").strip().lower()
     presets = deepcopy(out.get("app_presets") or {})
-    if not key:
+    if not isinstance(presets, dict):
+        presets = {}
+    requested = preset_id if preset_id is not None else out.get("app_preset")
+    if requested is None or str(requested).strip() == "":
         raise ValueError("No hay preset para borrar")
-    if not isinstance(presets, dict) or key not in presets:
-        raise ValueError(f"Preset desconocido: {key}")
+    key = _normalize_app_preset_id(requested, presets)
+    if key is None:
+        raise ValueError(f"Preset desconocido: {str(requested).strip()}")
     del presets[key]
     out["app_presets"] = presets
     out["app_preset"] = None

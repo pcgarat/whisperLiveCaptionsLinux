@@ -32,15 +32,15 @@ def test_load_missing_returns_defaults(tmp_path: Path) -> None:
     assert (
         cfg["latency_profiles"]["low"] == validate_config({})["latency_profiles"]["low"]
     )
-    assert cfg["translation_enabled"] is False
+    assert cfg["translation_enabled"] is True
     assert cfg["translation_target"] == "es"
-    assert cfg["translation_sticky_mode"] == "off"
+    assert cfg["translation_sticky_mode"] == "committed"
     assert cfg["second_line_mode"] == "none"
     assert cfg["captions_show_partials"] is False
     assert cfg["captions_allow_rewrite"] is True
     assert cfg["installed_languages"] == ["en", "es", "fr", "de", "it", "pt"]
     assert cfg["translator_model"] == "nllb-200-distilled-ct2"
-    assert cfg["translation_decode_preset"] == "balanced"
+    assert cfg["translation_decode_preset"] == "custom"
     assert (
         cfg["translation_profiles"]["balanced"]
         == TRANSLATION_FACTORY_PRESETS["balanced"]
@@ -191,10 +191,10 @@ def test_migrate_legacy_show_asr_line_to_second_line_mode() -> None:
 
 
 def test_translation_sticky_mode_defaults_and_clamp() -> None:
-    assert validate_config({})["translation_sticky_mode"] == "off"
-    assert validate_config({"translation_sticky_mode": "committed"})[
+    assert validate_config({})["translation_sticky_mode"] == "committed"
+    assert validate_config({"translation_sticky_mode": "off"})[
         "translation_sticky_mode"
-    ] == "committed"
+    ] == "off"
     assert validate_config({"translation_sticky_mode": "PARTIALS"})[
         "translation_sticky_mode"
     ] == "partials"
@@ -267,13 +267,17 @@ def test_translation_decode_defaults_and_factory_resync() -> None:
             }
         }
     )
-    assert cfg["translation_decode_preset"] == "balanced"
+    assert cfg["translation_decode_preset"] == "custom"
     assert (
         cfg["translation_profiles"]["balanced"]
         == TRANSLATION_FACTORY_PRESETS["balanced"]
     )
     assert cfg["translation_profiles"]["custom"]["beam_size"] == 5
-    assert effective_translation_decode(cfg) == TRANSLATION_FACTORY_PRESETS["balanced"]
+    assert effective_translation_decode(cfg) == {
+        "beam_size": 5,
+        "length_penalty": 1.2,
+        "no_repeat_ngram_size": 4,
+    }
 
 
 def test_translation_decode_clamps_and_unknown_preset() -> None:
