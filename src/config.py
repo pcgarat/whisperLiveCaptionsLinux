@@ -16,6 +16,7 @@ DEFAULTS: dict[str, Any] = {
     "buffer_trimming_sec": 15.0,
     "use_vad": True,
     "latency_mode": "stable",
+    "always_on_top": True,
     "font_size": 28,
     "font_color": "#ffffff",
     "bg_color": "#000000",
@@ -54,6 +55,7 @@ def validate_config(data: dict[str, Any]) -> dict[str, Any]:
     if cfg["latency_mode"] not in {"stable", "low"}:
         cfg["latency_mode"] = "stable"
     cfg["use_vad"] = bool(cfg["use_vad"])
+    cfg["always_on_top"] = bool(cfg.get("always_on_top", True))
     cfg["audio_monitor"] = str(cfg.get("audio_monitor") or "")
 
     pos = cfg.get("window_pos")

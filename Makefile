@@ -9,7 +9,8 @@ export PYTHONPATH := $(CURDIR)
 define PYQT_ENV
 QT6_ROOT=$$($(BIN)/python -c 'import PyQt6, pathlib; print(pathlib.Path(PyQt6.__file__).resolve().parent / "Qt6")'); \
 export LD_LIBRARY_PATH="$$QT6_ROOT/lib$${LD_LIBRARY_PATH:+:$$LD_LIBRARY_PATH}"; \
-export QT_PLUGIN_PATH="$$QT6_ROOT/plugins"
+export QT_PLUGIN_PATH="$$QT6_ROOT/plugins"; \
+export QT_QPA_PLATFORM="$${QT_QPA_PLATFORM:-xcb}"
 endef
 
 help: ## Muestra esta ayuda

@@ -9,6 +9,7 @@
   "buffer_trimming_sec": 15.0,
   "use_vad": true,
   "latency_mode": "stable",
+  "always_on_top": true,
   "font_size": 28,
   "font_color": "#ffffff",
   "bg_color": "#000000",

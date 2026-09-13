@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import subprocess
 from collections.abc import Callable
 from typing import Any
 
@@ -16,36 +17,64 @@ class SubtitleOverlay(QtWidgets.QWidget):
         config: dict[str, Any],
         on_open_settings: Callable[[], None] | None = None,
         on_close_app: Callable[[], None] | None = None,
+        on_save_config: Callable[[dict[str, Any]], None] | None = None,
     ) -> None:
         super().__init__()
         self.text_queue = text_queue
         self.config = config
         self.on_open_settings = on_open_settings
         self.on_close_app = on_close_app
+        self.on_save_config = on_save_config
         self._final_text = ""
         self._partial_text = ""
         self._drag_offset: QtCore.QPoint | None = None
+        self._always_on_top = bool(config.get("always_on_top", True))
+        self._ignore_move_save = False
+        self._save_pos_timer = QtCore.QTimer(self)
+        self._save_pos_timer.setSingleShot(True)
+        self._save_pos_timer.timeout.connect(self._persist_geometry)
         self._build_ui()
         self._apply_style()
+        self._build_context_menu()
 
         self._timer = QtCore.QTimer(self)
         self._timer.timeout.connect(self._poll_queue)
         self._timer.start(80)
 
-    def _build_ui(self) -> None:
-        self.setWindowFlags(
-            QtCore.Qt.WindowType.FramelessWindowHint
-            | QtCore.Qt.WindowType.WindowStaysOnTopHint
-            | QtCore.Qt.WindowType.Tool
+        self._keep_above_timer = QtCore.QTimer(self)
+        self._keep_above_timer.timeout.connect(self._ensure_on_top)
+        self._keep_above_timer.start(1500)
+
+    def _window_flags(self) -> QtCore.Qt.WindowType:
+        flags = (
+            QtCore.Qt.WindowType.Window
+            | QtCore.Qt.WindowType.FramelessWindowHint
+            | QtCore.Qt.WindowType.CustomizeWindowHint
         )
+        if self._always_on_top:
+            flags |= QtCore.Qt.WindowType.WindowStaysOnTopHint
+        return flags
+
+    def _build_ui(self) -> None:
+        self.setWindowTitle("Subtítulos en directo")
+        self.setWindowFlags(self._window_flags())
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating)
+        self.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
+        self.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+        self.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+        self.customContextMenuRequested.connect(self._show_context_menu)
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
 
         self.panel = QtWidgets.QFrame()
         self.panel.setObjectName("captionPanel")
+        self.panel.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+        self.panel.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+        self.panel.customContextMenuRequested.connect(
+            lambda pos: self._show_context_menu(self.panel.mapToParent(pos))
+        )
         panel_layout = QtWidgets.QVBoxLayout(self.panel)
         pad = int(self.config.get("padding", 24))
         panel_layout.setContentsMargins(pad, pad // 2, pad, pad // 2)
@@ -58,9 +87,11 @@ class SubtitleOverlay(QtWidgets.QWidget):
 
         self.settings_btn = QtWidgets.QPushButton("⚙")
         self.settings_btn.setFixedWidth(36)
+        self.settings_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.settings_btn.clicked.connect(self._handle_settings)
         self.close_btn = QtWidgets.QPushButton("✕")
         self.close_btn.setFixedWidth(36)
+        self.close_btn.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
         self.close_btn.clicked.connect(self._handle_close)
         top.addWidget(self.settings_btn)
         top.addWidget(self.close_btn)
@@ -82,23 +113,185 @@ class SubtitleOverlay(QtWidgets.QWidget):
         panel_layout.addWidget(self.partial_label)
         root.addWidget(self.panel)
 
+        for widget in (self, self.panel, self.lang_label, self.final_label, self.partial_label):
+            widget.installEventFilter(self)
+            widget.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
+
+        self.lang_label.customContextMenuRequested.connect(
+            lambda pos: self._show_context_menu(self.lang_label.mapTo(self, pos))
+        )
+        self.final_label.customContextMenuRequested.connect(
+            lambda pos: self._show_context_menu(self.final_label.mapTo(self, pos))
+        )
+        self.partial_label.customContextMenuRequested.connect(
+            lambda pos: self._show_context_menu(self.partial_label.mapTo(self, pos))
+        )
+
         width = int(self.config.get("window_width", 900))
         self.resize(width, 150)
+        self._restore_position()
+
+    def _saved_position(self) -> list[int] | None:
         pos = self.config.get("window_pos")
         if isinstance(pos, list) and len(pos) == 2:
-            self.move(int(pos[0]), int(pos[1]))
-        else:
-            screen = QtGui.QGuiApplication.primaryScreen()
-            if screen is not None:
-                geo = screen.availableGeometry()
-                self.move(geo.center().x() - width // 2, geo.bottom() - 220)
+            try:
+                return [int(pos[0]), int(pos[1])]
+            except (TypeError, ValueError):
+                return None
+        return None
+
+    def _clamp_to_screens(self, x: int, y: int) -> tuple[int, int]:
+        screens = QtGui.QGuiApplication.screens()
+        if not screens:
+            return x, y
+        point = QtCore.QPoint(x, y)
+        for screen in screens:
+            if screen.geometry().contains(point):
+                return x, y
+        # Si quedó fuera (cambio de monitor), ancla abajo-centro del primario.
+        geo = QtGui.QGuiApplication.primaryScreen().availableGeometry()
+        return geo.center().x() - self.width() // 2, geo.bottom() - max(180, self.height() + 40)
+
+    def _restore_position(self) -> None:
+        saved = self._saved_position()
+        self._ignore_move_save = True
+        try:
+            if saved is not None:
+                x, y = self._clamp_to_screens(saved[0], saved[1])
+                self.move(x, y)
+            else:
+                screen = QtGui.QGuiApplication.primaryScreen()
+                if screen is not None:
+                    geo = screen.availableGeometry()
+                    self.move(geo.center().x() - self.width() // 2, geo.bottom() - 220)
+        finally:
+            self._ignore_move_save = False
+
+    def _schedule_persist_geometry(self) -> None:
+        if self._ignore_move_save or not self.isVisible():
+            return
+        self.config["window_pos"] = [self.x(), self.y()]
+        self.config["window_width"] = self.width()
+        self._save_pos_timer.start(250)
+
+    def _persist_geometry(self) -> None:
+        self.config["window_pos"] = [self.x(), self.y()]
+        self.config["window_width"] = self.width()
+        if self.on_save_config is not None:
+            self.on_save_config(self.config)
+
+    def _reapply_flags(self, *, show_again: bool) -> None:
+        """setWindowFlags recrea la ventana nativa y pierde la posición si no se restaura."""
+        pos = [self.x(), self.y()] if self.isVisible() else self._saved_position()
+        self._ignore_move_save = True
+        try:
+            self.setWindowFlags(self._window_flags())
+            if pos is not None:
+                x, y = self._clamp_to_screens(int(pos[0]), int(pos[1]))
+                self.move(x, y)
+                self.config["window_pos"] = [x, y]
+            if show_again:
+                self.show()
+        finally:
+            self._ignore_move_save = False
+
+    def _build_context_menu(self) -> None:
+        self._menu = QtWidgets.QMenu(self)
+        self._menu.setStyleSheet(
+            """
+            QMenu {
+                background: #2b2b2b;
+                color: #f0f0f0;
+                border: 1px solid #555;
+                padding: 4px;
+            }
+            QMenu::item {
+                padding: 6px 28px 6px 12px;
+            }
+            QMenu::item:selected {
+                background: #3584e4;
+            }
+            QMenu::separator {
+                height: 1px;
+                background: #555;
+                margin: 4px 8px;
+            }
+            """
+        )
+
+        self._act_hide = self._menu.addAction("Ocultar")
+        self._act_hide.triggered.connect(self.hide)
+
+        self._act_above = self._menu.addAction("Siempre encima")
+        self._act_above.setCheckable(True)
+        self._act_above.setChecked(self._always_on_top)
+        self._act_above.toggled.connect(self.set_always_on_top)
+
+        self._menu.addSeparator()
+        self._act_settings = self._menu.addAction("Configuración…")
+        self._act_settings.triggered.connect(self._handle_settings)
+        self._act_close = self._menu.addAction("Cerrar")
+        self._act_close.triggered.connect(self._handle_close)
+
+    def _show_context_menu(self, pos: QtCore.QPoint) -> None:
+        self._act_above.blockSignals(True)
+        self._act_above.setChecked(self._always_on_top)
+        self._act_above.blockSignals(False)
+        self._menu.exec(self.mapToGlobal(pos))
+
+    def set_always_on_top(self, enabled: bool) -> None:
+        self._always_on_top = bool(enabled)
+        self.config["always_on_top"] = self._always_on_top
+        self._reapply_flags(show_again=True)
+        self._ensure_on_top()
+        self._persist_geometry()
+
+    def showEvent(self, event: QtGui.QShowEvent) -> None:
+        super().showEvent(event)
+        self._restore_position()
+        QtCore.QTimer.singleShot(0, self._restore_position)
+        QtCore.QTimer.singleShot(50, self._restore_position)
+        QtCore.QTimer.singleShot(0, self._ensure_on_top)
+        QtCore.QTimer.singleShot(200, self._ensure_on_top)
+
+    def moveEvent(self, event: QtGui.QMoveEvent) -> None:
+        super().moveEvent(event)
+        self._schedule_persist_geometry()
+
+    def _ensure_on_top(self) -> None:
+        if not self.isVisible() or not self._always_on_top:
+            return
+        flags = self.windowFlags()
+        if not (flags & QtCore.Qt.WindowType.WindowStaysOnTopHint):
+            self._reapply_flags(show_again=True)
+            return
+        self.raise_()
+        self._apply_x11_above(True)
+
+    def _apply_x11_above(self, enabled: bool) -> None:
+        """Refuerza _NET_WM_STATE_ABOVE en XWayland/X11 (como el menú de GNOME)."""
+        if QtGui.QGuiApplication.platformName() != "xcb":
+            return
+        wid = int(self.winId())
+        if wid <= 0:
+            return
+        action = "add" if enabled else "remove"
+        # wmctrl es opcional; si no está, el hint de Qt suele bastar bajo xcb.
+        try:
+            subprocess.run(
+                ["wmctrl", "-i", "-r", hex(wid), "-b", f"{action},above"],
+                check=False,
+                capture_output=True,
+                timeout=1.5,
+            )
+        except (FileNotFoundError, subprocess.SubprocessError):
+            pass
 
     def _apply_style(self) -> None:
         font_size = int(self.config.get("font_size", 28))
         font_color = str(self.config.get("font_color", "#ffffff"))
         bg = str(self.config.get("bg_color", "#000000"))
         alpha = float(self.config.get("bg_alpha", 0.55))
-        # Convert hex + alpha to rgba
         color = QtGui.QColor(bg)
         color.setAlphaF(alpha)
         rgba = f"rgba({color.red()}, {color.green()}, {color.blue()}, {color.alphaF():.2f})"
@@ -143,10 +336,17 @@ class SubtitleOverlay(QtWidgets.QWidget):
     def apply_config(self, config: dict[str, Any]) -> None:
         self.config = config
         pad = int(config.get("padding", 24))
-        self.panel.layout().setContentsMargins(pad, pad // 2, pad, pad // 2)
+        layout = self.panel.layout()
+        if layout is not None:
+            layout.setContentsMargins(pad, pad // 2, pad, pad // 2)
         self.lang_label.setText(str(config.get("language", "en")).upper())
         self.resize(int(config.get("window_width", 900)), self.height())
         self._apply_style()
+        desired = bool(config.get("always_on_top", True))
+        if desired != self._always_on_top:
+            self.set_always_on_top(desired)
+        else:
+            self._ensure_on_top()
 
     def _poll_queue(self) -> None:
         updated = False
@@ -159,7 +359,6 @@ class SubtitleOverlay(QtWidgets.QWidget):
                 self._final_text = item.text
                 self._partial_text = ""
             else:
-                # partial carries committed+partial already from pipeline
                 if self._final_text and item.text.startswith(self._final_text):
                     self._partial_text = item.text[len(self._final_text) :].strip()
                 else:
@@ -172,19 +371,53 @@ class SubtitleOverlay(QtWidgets.QWidget):
     def current_position(self) -> list[int]:
         return [self.x(), self.y()]
 
+    def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
+        if event.type() == QtCore.QEvent.Type.MouseButtonPress and isinstance(
+            event, QtGui.QMouseEvent
+        ):
+            if obj in (self.settings_btn, self.close_btn):
+                return False
+            if event.button() == QtCore.Qt.MouseButton.RightButton:
+                self._show_context_menu(self.mapFromGlobal(event.globalPosition().toPoint()))
+                return True
+            if event.button() == QtCore.Qt.MouseButton.LeftButton:
+                if self._begin_drag(event):
+                    return True
+        if event.type() == QtCore.QEvent.Type.MouseMove and isinstance(event, QtGui.QMouseEvent):
+            if self._drag_offset is not None and event.buttons() & QtCore.Qt.MouseButton.LeftButton:
+                self.move(event.globalPosition().toPoint() - self._drag_offset)
+                return True
+        if event.type() == QtCore.QEvent.Type.MouseButtonRelease:
+            self._drag_offset = None
+        return super().eventFilter(obj, event)
+
+    def _begin_drag(self, event: QtGui.QMouseEvent) -> bool:
+        handle = self.windowHandle()
+        if handle is not None and handle.startSystemMove():
+            return True
+        self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+        return True
+
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
-        if event.button() == QtCore.Qt.MouseButton.LeftButton:
-            self._drag_offset = event.globalPosition().toPoint() - self.frameGeometry().topLeft()
+        if event.button() == QtCore.Qt.MouseButton.RightButton:
+            self._show_context_menu(event.pos())
             event.accept()
+            return
+        if event.button() == QtCore.Qt.MouseButton.LeftButton and self._begin_drag(event):
+            event.accept()
+            return
+        super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
         if self._drag_offset is not None and event.buttons() & QtCore.Qt.MouseButton.LeftButton:
             self.move(event.globalPosition().toPoint() - self._drag_offset)
             event.accept()
+            return
+        super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
         self._drag_offset = None
-        event.accept()
+        super().mouseReleaseEvent(event)
 
     def _handle_settings(self) -> None:
         if self.on_open_settings:

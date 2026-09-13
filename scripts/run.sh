@@ -19,5 +19,7 @@ export PYTHONPATH="$ROOT${PYTHONPATH:+:$PYTHONPATH}"
 QT6_ROOT="$(python -c 'import PyQt6, pathlib; print(pathlib.Path(PyQt6.__file__).resolve().parent / "Qt6")')"
 export LD_LIBRARY_PATH="$QT6_ROOT/lib${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
 export QT_PLUGIN_PATH="$QT6_ROOT/plugins"
+# xcb (XWayland): "siempre encima" fiable en GNOME; override con QT_QPA_PLATFORM=wayland si hace falta
+export QT_QPA_PLATFORM="${QT_QPA_PLATFORM:-xcb}"
 
 exec python -m src.app "$@"

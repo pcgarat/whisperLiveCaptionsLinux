@@ -1,9 +1,14 @@
 from __future__ import annotations
 
+import os
 import queue
 import sys
 import traceback
 from pathlib import Path
+
+# En GNOME/Wayland, "siempre encima" de Qt suele fallar. XWayland (xcb) sí respeta
+# WindowStaysOnTopHint / _NET_WM_STATE_ABOVE, como el menú de Chrome.
+os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
 from PyQt6 import QtWidgets
 
@@ -46,6 +51,7 @@ class AppController:
             config=self.config,
             on_open_settings=self.open_settings,
             on_close_app=self.shutdown,
+            on_save_config=self._save_config,
         )
         self.overlay.show()
 
@@ -61,6 +67,14 @@ class AppController:
         code = qt_app.exec()
         self.shutdown()
         return code
+
+    def _save_config(self, cfg: dict | None = None) -> None:
+        if cfg is not None:
+            self.config = cfg
+        if self.overlay is not None:
+            self.config["window_pos"] = self.overlay.current_position()
+            self.config["window_width"] = self.overlay.width()
+        save_config(self.config, self.config_path)
 
     def _start_pipeline(self) -> None:
         if self.pipeline is not None:
@@ -81,7 +95,7 @@ class AppController:
             for k in ("language", "model", "audio_monitor", "device", "compute_type", "use_vad")
         )
         self.config = new_cfg
-        save_config(self.config, self.config_path)
+        self._save_config(self.config)
         self.overlay.apply_config(self.config)
 
         if restart_needed:
@@ -95,8 +109,7 @@ class AppController:
             return
         self._shutting_down = True
         if self.overlay is not None:
-            self.config["window_pos"] = self.overlay.current_position()
-            save_config(self.config, self.config_path)
+            self._save_config()
         if self.pipeline is not None:
             self.pipeline.stop()
             self.pipeline = None
