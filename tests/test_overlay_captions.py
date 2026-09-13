@@ -244,3 +244,36 @@ def test_partial_can_carry_translation(qapp: QtWidgets.QApplication) -> None:
     assert ov._partial_text == "world"
     assert ov._translated_text == "Hola mundo"
     ov.close()
+
+
+def test_notice_shows_without_changing_captions(qapp: QtWidgets.QApplication) -> None:
+    ov, q = _overlay(qapp)
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Hola",
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    q.put(
+        CaptionUpdate(
+            text="",
+            is_final=False,
+            language="en",
+            ts_mono=now,
+            notice="Traducción en CPU (CUDA no disponible). Puede ir más lenta.",
+        )
+    )
+    ov._poll_queue()
+    assert ov._final_text == "Hello"
+    assert ov._translated_text == "Hola"
+    assert not ov.notice_label.isHidden()
+    assert "CPU" in ov.notice_label.text()
+    ov._clear_notice()
+    assert ov.notice_label.isHidden()
+    ov.close()

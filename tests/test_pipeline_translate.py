@@ -89,6 +89,52 @@ def test_translate_confirmed_swallows_errors() -> None:
     assert len(t.calls) == 1
 
 
+class FallbackNoticeTranslator:
+    def __init__(self) -> None:
+        self._pending = "Traducción en CPU (CUDA no disponible). Puede ir más lenta."
+
+    def translate(
+        self,
+        text: str,
+        source_lang: str,
+        target_lang: str = "es",
+        decode: dict[str, float | int] | None = None,
+    ) -> str:
+        return f"ES:{text}"
+
+    def take_cpu_fallback_notice(self) -> str | None:
+        msg = self._pending
+        self._pending = None
+        return msg
+
+
+def test_notify_translator_device_emits_notice_once() -> None:
+    q: queue.Queue = queue.Queue()
+    cfg = validate_config(
+        {
+            "translation_enabled": True,
+            "language": "en",
+            "translation_target": "es",
+            "device": "cuda",
+        }
+    )
+    t = FallbackNoticeTranslator()
+    pipeline = AsrPipeline(cfg, q, translator=t)
+    pipeline._notify_translator_device(t)
+    pipeline._notify_translator_device(t)
+
+    notices = []
+    while True:
+        try:
+            item = q.get_nowait()
+        except queue.Empty:
+            break
+        if item.notice:
+            notices.append(item.notice)
+    assert len(notices) == 1
+    assert "CPU" in notices[0]
+
+
 def test_apply_translation_settings_hot_swaps_without_start() -> None:
     cfg = validate_config(
         {
