@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import html
+import os
 import queue
 import subprocess
 from collections.abc import Callable
@@ -10,6 +11,9 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from src.asr.languages import AVAILABLE_LANGUAGES, language_label
 from src.asr.types import CaptionUpdate
+from src.debug.live_metrics import PERF, format_perf_chip
+from src.debug.trace import debug_hud_enabled, debug_trace_enabled
+from src.debug.vram import query_vram
 
 # Cola visible del overlay: suficiente para scrollear, sin crecer sin límite.
 _MAX_DISPLAY_CHARS = 4000
@@ -81,6 +85,10 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self._keep_above_timer.timeout.connect(self._ensure_on_top)
         self._keep_above_timer.start(1500)
 
+        self._hud_timer = QtCore.QTimer(self)
+        self._hud_timer.timeout.connect(self._refresh_debug_hud)
+        self._sync_debug_hud()
+
     def _window_flags(self) -> QtCore.Qt.WindowType:
         flags = (
             QtCore.Qt.WindowType.Window
@@ -148,6 +156,19 @@ class SubtitleOverlay(QtWidgets.QWidget):
         top.addWidget(self.settings_btn)
         top.addWidget(self.close_btn)
         panel_layout.addLayout(top)
+
+        self.debug_hud_label = QtWidgets.QLabel("")
+        self.debug_hud_label.setObjectName("debugHud")
+        self.debug_hud_label.setWordWrap(False)
+        self.debug_hud_label.setTextInteractionFlags(
+            QtCore.Qt.TextInteractionFlag.NoTextInteraction
+        )
+        self.debug_hud_label.setToolTip(
+            "ASR = último infer · q = cola captions→UI · "
+            "buf = audio en anillo · VRAM = GPU 0 (NVML)"
+        )
+        self.debug_hud_label.setVisible(False)
+        panel_layout.addWidget(self.debug_hud_label)
 
         self.notice_label = QtWidgets.QLabel("")
         self.notice_label.setObjectName("noticeLabel")
@@ -345,6 +366,12 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self._act_above.toggled.connect(self.set_always_on_top)
 
         self._menu.addSeparator()
+        self._act_debug_hud = self._menu.addAction("HUD debug")
+        self._act_debug_hud.setCheckable(True)
+        self._act_debug_hud.setChecked(debug_hud_enabled(self.config))
+        self._act_debug_hud.toggled.connect(self._on_debug_hud_toggled)
+
+        self._menu.addSeparator()
         self._act_settings = self._menu.addAction("Configuración…")
         self._act_settings.triggered.connect(self._handle_settings)
         self._act_close = self._menu.addAction("Cerrar")
@@ -354,7 +381,48 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self._act_above.blockSignals(True)
         self._act_above.setChecked(self._always_on_top)
         self._act_above.blockSignals(False)
+        forced = debug_trace_enabled() or bool(
+            (os.environ.get("WLCL_DEBUG_HUD") or "").strip()
+        )
+        self._act_debug_hud.blockSignals(True)
+        self._act_debug_hud.setChecked(debug_hud_enabled(self.config))
+        self._act_debug_hud.setEnabled(not forced)
+        self._act_debug_hud.setToolTip(
+            "Activo por WLCL_DEBUG_TRACE / WLCL_DEBUG_HUD"
+            if forced
+            else "Chip VRAM + latencia ASR (solo diagnóstico)"
+        )
+        self._act_debug_hud.blockSignals(False)
         self._menu.exec(self.mapToGlobal(pos))
+
+    def _on_debug_hud_toggled(self, enabled: bool) -> None:
+        self.config["debug_hud"] = bool(enabled)
+        if self.on_save_config:
+            self.on_save_config(self.config)
+        self._sync_debug_hud()
+
+    def _sync_debug_hud(self) -> None:
+        on = debug_hud_enabled(self.config)
+        self.debug_hud_label.setVisible(on)
+        if on:
+            if not self._hud_timer.isActive():
+                self._hud_timer.start(1000)
+            self._refresh_debug_hud()
+        else:
+            self._hud_timer.stop()
+            self.debug_hud_label.setText("")
+
+    def _refresh_debug_hud(self) -> None:
+        if not debug_hud_enabled(self.config):
+            return
+        snap = PERF.snapshot()
+        vram = query_vram()
+        text = format_perf_chip(
+            snap,
+            vram_used_mb=vram.used_mb if vram else None,
+            vram_total_mb=vram.total_mb if vram else None,
+        )
+        self.debug_hud_label.setText(text)
 
     def set_always_on_top(self, enabled: bool) -> None:
         self._always_on_top = bool(enabled)
@@ -682,6 +750,11 @@ class SubtitleOverlay(QtWidgets.QWidget):
                 font-size: 12px;
                 font-weight: 600;
             }}
+            QLabel#debugHud {{
+                color: rgba(180, 220, 180, 0.75);
+                font-size: 11px;
+                font-family: monospace;
+            }}
             QPushButton#translateToggle {{
                 background: transparent;
                 color: {partial_rgba};
@@ -727,6 +800,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self._apply_text_align()
         self._apply_style()
         self._sync_translation_ui()
+        self._sync_debug_hud()
         self._apply_caption_geometry()
         desired = bool(config.get("always_on_top", True))
         if desired != self._always_on_top:
@@ -988,6 +1062,8 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self.notice_label.setVisible(False)
 
     def _poll_queue(self) -> None:
+        if debug_hud_enabled(self.config):
+            PERF.note_out_queue(self.text_queue.qsize())
         updated = False
         while True:
             try:

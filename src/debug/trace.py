@@ -48,6 +48,20 @@ def debug_trace_enabled() -> bool:
     return raw in ("1", "true", "yes", "on")
 
 
+def _env_flag(name: str) -> bool:
+    raw = (os.environ.get(name) or "").strip().lower()
+    return raw in ("1", "true", "yes", "on")
+
+
+def debug_hud_enabled(config: dict[str, Any] | None = None) -> bool:
+    """HUD visible: config, WLCL_DEBUG_HUD o modo trazas (make debug)."""
+    if _env_flag("WLCL_DEBUG_HUD") or debug_trace_enabled():
+        return True
+    if config is not None and bool(config.get("debug_hud", False)):
+        return True
+    return False
+
+
 def resolve_trace_path(root: Path | None = None) -> Path:
     override = (os.environ.get("WLCL_DEBUG_TRACE_PATH") or "").strip()
     if override:

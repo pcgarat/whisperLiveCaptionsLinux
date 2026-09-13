@@ -17,6 +17,7 @@ from src.config import (
     effective_latency_profile,
     effective_translation_decode,
 )
+from src.debug.live_metrics import PERF
 from src.debug.trace import SessionTracer
 
 logger = logging.getLogger(__name__)
@@ -669,10 +670,12 @@ class AsrPipeline:
             language = str(self.config.get("language", "en"))
             audio_sec = float(audio.size) / sample_rate if audio.size else 0.0
             try:
+                PERF.set_asr_busy(True)
                 t0 = time.monotonic()
                 hypothesis = self._engine.transcribe(audio)
                 infer_ms = (time.monotonic() - t0) * 1000.0
             except Exception as exc:
+                PERF.set_asr_busy(False)
                 if self._tracer is not None:
                     self._tracer.asr_error(str(exc))
                 self.out_queue.put(
@@ -685,6 +688,15 @@ class AsrPipeline:
                 )
                 time.sleep(0.5)
                 continue
+
+            buf_sec = (
+                self._capture.buffer.duration_seconds()
+                if self._capture is not None
+                else None
+            )
+            PERF.note_asr_infer(
+                infer_ms=infer_ms, audio_sec=audio_sec, buffer_sec=buf_sec
+            )
 
             if self._tracer is not None:
                 self._tracer.asr_infer(

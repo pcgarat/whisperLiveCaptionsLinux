@@ -61,6 +61,7 @@ def test_validate_clamps_ranges() -> None:
             "bg_alpha": 2.5,
             "padding": -3,
             "text_align": "nope",
+            "compute_type": "nope",
             "latency_mode": "nope",
             "latency_profiles": {
                 "stable": {
@@ -75,6 +76,7 @@ def test_validate_clamps_ranges() -> None:
     assert cfg["bg_alpha"] == 1.0
     assert cfg["padding"] == 0
     assert cfg["text_align"] == "center"
+    assert cfg["compute_type"] == "float16"
     assert cfg["latency_mode"] == "stable"
     assert cfg["latency_profiles"]["stable"]["agreement_n"] == 5
     assert cfg["latency_profiles"]["stable"]["max_latency_sec"] == 0.2

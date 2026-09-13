@@ -26,9 +26,9 @@ install: venv ## Instala dependencias de requirements.txt
 run: install ## Arranca la app de subtítulos
 	@$(PYQT_ENV); $(BIN)/python -m src.app
 
-debug: install ## Arranca con trazas de sesión → debug/trace.json
+debug: install ## Arranca con trazas + HUD → debug/trace.json
 	@mkdir -p debug
-	@echo "Modo debug: al cerrar la app se escribe debug/trace.json"
+	@echo "Modo debug: HUD en overlay; al cerrar se escribe debug/trace.json"
 	@$(PYQT_ENV); WLCL_DEBUG_TRACE=1 $(BIN)/python -m src.app
 
 test: install ## Ejecuta tests unitarios (offscreen + libs Qt del venv)
