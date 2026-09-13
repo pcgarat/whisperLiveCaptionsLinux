@@ -19,6 +19,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
         on_close_app: Callable[[], None] | None = None,
         on_save_config: Callable[[dict[str, Any]], None] | None = None,
         on_restart_pipeline: Callable[[], None] | None = None,
+        on_translation_changed: Callable[[], None] | None = None,
     ) -> None:
         super().__init__()
         self.text_queue = text_queue
@@ -27,6 +28,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self.on_close_app = on_close_app
         self.on_save_config = on_save_config
         self.on_restart_pipeline = on_restart_pipeline
+        self.on_translation_changed = on_translation_changed
         self._final_text = ""
         self._partial_text = ""
         self._translated_text = ""
@@ -440,7 +442,10 @@ class SubtitleOverlay(QtWidgets.QWidget):
         if not enabled:
             self._translated_text = ""
         self._sync_translation_ui()
-        self._persist_and_maybe_restart()
+        if self.on_save_config is not None:
+            self.on_save_config(self.config)
+        if self.on_translation_changed is not None:
+            self.on_translation_changed()
 
     def _show_language_menu(self) -> None:
         langs = self.config.get("installed_languages") or ["en", "es"]
@@ -468,11 +473,9 @@ class SubtitleOverlay(QtWidgets.QWidget):
             self.config["installed_languages"] = [lang, *installed]
         self.lang_label.setText(lang.upper())
         self._sync_translation_ui()
-        self._persist_and_maybe_restart()
-
-    def _persist_and_maybe_restart(self) -> None:
         if self.on_save_config is not None:
             self.on_save_config(self.config)
+        # Idioma ASR va en WhisperEngine: requiere reinicio del pipeline.
         if self.on_restart_pipeline is not None:
             self.on_restart_pipeline()
 

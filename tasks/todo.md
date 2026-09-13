@@ -3,7 +3,7 @@
 Spec: `docs/specs/fase2.2-traduccion-en-es-2026-09-13.md`  
 Plan: `tasks/plan.md`
 
-**Estado:** implementación completa (código + unit tests 2026-09-13). Pendiente smoke manual ≥15 min.  
+**Estado:** implementación completa + hot-swap del translator (2026-09-13). Pendiente smoke manual ≥15 min.  
 Fase 2.1 cerrada (modo latencia).
 
 ---

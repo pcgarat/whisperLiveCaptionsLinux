@@ -28,7 +28,8 @@ La primera ejecución crea `.venv`, instala dependencias y puede descargar el mo
 5. Arrastra el overlay; ajusta tipografía/transparencia.
 6. ✕ cierra y detiene captura + ASR.
 
-Cambiar modo, profiles, modelo, dispositivo, idioma o traducción **reinicia el pipeline ASR** al Guardar / al toggle.
+Cambiar modo, profiles, modelo, dispositivo o idioma ASR **reinicia el pipeline**.
+El toggle de traducción hace **hot-swap** del traductor (no recarga Whisper).
 
 ### Traducción EN→ES (fase 2.2)
 

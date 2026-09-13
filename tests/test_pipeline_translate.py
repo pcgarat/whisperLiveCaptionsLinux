@@ -1,6 +1,9 @@
 from __future__ import annotations
 
-from src.asr.pipeline import translate_confirmed
+import queue
+
+from src.asr.pipeline import AsrPipeline, translate_confirmed
+from src.asr.translate import NullTranslator
 
 
 class RecordingTranslator:
@@ -63,3 +66,30 @@ def test_translate_confirmed_swallows_errors() -> None:
     )
     assert out is None
     assert len(t.calls) == 1
+
+
+def test_apply_translation_settings_hot_swaps_without_start() -> None:
+    cfg = {
+        "translation_enabled": False,
+        "translation_target": "es",
+        "translator_model": "nllb-200-distilled-ct2",
+        "device": "cpu",
+        "language": "en",
+        "latency_mode": "stable",
+    }
+    pipeline = AsrPipeline(cfg, queue.Queue(), translator=NullTranslator())
+    assert isinstance(pipeline.translation_snapshot()[2], NullTranslator)
+
+    cfg["translation_enabled"] = True
+    pipeline.apply_translation_settings(cfg)
+    enabled, target, translator = pipeline.translation_snapshot()
+    assert enabled is True
+    assert target == "es"
+    assert type(translator).__name__ == "NllbCt2Translator"
+    assert not getattr(translator, "is_loaded", True)
+
+    cfg["translation_enabled"] = False
+    pipeline.apply_translation_settings(cfg)
+    enabled, _, translator = pipeline.translation_snapshot()
+    assert enabled is False
+    assert isinstance(translator, NullTranslator)

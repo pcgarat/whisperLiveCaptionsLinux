@@ -52,6 +52,7 @@ class AsrPipeline:
         self._thread: threading.Thread | None = None
         self._capture: SystemAudioCapture | None = None
         self._engine: WhisperEngine | None = None
+        self._tx_lock = threading.Lock()
         self._translator: Translator = (
             translator if translator is not None else create_translator(config)
         )
@@ -94,15 +95,50 @@ class AsrPipeline:
         self._thread.start()
 
     def _preload_translator(self) -> None:
-        if not bool(self.config.get("translation_enabled", False)):
+        with self._tx_lock:
+            enabled = bool(self.config.get("translation_enabled", False))
+            translator = self._translator
+        if not enabled:
             return
-        load = getattr(self._translator, "load", None)
+        self._preload_translator_instance(translator)
+
+    def _preload_translator_instance(self, translator: Translator) -> None:
+        load = getattr(translator, "load", None)
         if not callable(load):
             return
         try:
             load()
         except Exception:
             logger.exception("No se pudo precargar el traductor; se intentará en el primer final")
+
+    def apply_translation_settings(self, config: dict[str, Any]) -> None:
+        """Hot-swap del Translator sin reiniciar captura/Whisper."""
+        with self._tx_lock:
+            for key in (
+                "translation_enabled",
+                "translation_target",
+                "translator_model",
+                "device",
+                "language",
+            ):
+                if key in config:
+                    self.config[key] = config[key]
+            self._translator = create_translator(self.config)
+            translator = self._translator
+            enabled = bool(self.config.get("translation_enabled", False))
+        if enabled:
+            threading.Thread(
+                target=self._preload_translator_instance,
+                args=(translator,),
+                name="tx-preload",
+                daemon=True,
+            ).start()
+
+    def translation_snapshot(self) -> tuple[bool, str, Translator]:
+        with self._tx_lock:
+            enabled = bool(self.config.get("translation_enabled", False))
+            target = str(self.config.get("translation_target") or "es")
+            return enabled, target, self._translator
 
     def stop(self, timeout: float = 3.0) -> None:
         self._stop.set()
@@ -121,8 +157,6 @@ class AsrPipeline:
             min_chunk_seconds=float(profile["min_chunk_seconds"]),
         )
         language = str(self.config.get("language", "en"))
-        target_lang = str(self.config.get("translation_target") or "es")
-        translation_enabled = bool(self.config.get("translation_enabled", False))
         trim_sec = float(self.config.get("buffer_trimming_sec", 15.0))
 
         while not self._stop.is_set():
@@ -151,12 +185,13 @@ class AsrPipeline:
             result = self._streamer.push(hypothesis)
             now = time.monotonic()
             if result.newly_committed:
+                translation_enabled, target_lang, translator = self.translation_snapshot()
                 translated = translate_confirmed(
                     result.committed,
                     source_lang=language,
                     target_lang=target_lang,
                     translation_enabled=translation_enabled,
-                    translator=self._translator,
+                    translator=translator,
                 )
                 self.out_queue.put(
                     CaptionUpdate(

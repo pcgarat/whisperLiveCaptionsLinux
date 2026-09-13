@@ -53,6 +53,7 @@ class AppController:
             on_close_app=self.shutdown,
             on_save_config=self._save_config,
             on_restart_pipeline=self._restart_pipeline_safe,
+            on_translation_changed=self._hot_swap_translator,
         )
         self.overlay.show()
 
@@ -90,6 +91,19 @@ class AppController:
         except Exception as exc:
             QtWidgets.QMessageBox.critical(self.overlay, "Error al reiniciar ASR", str(exc))
 
+    def _hot_swap_translator(self) -> None:
+        if self.pipeline is None:
+            return
+        try:
+            self.pipeline.apply_translation_settings(self.config)
+        except Exception as exc:
+            assert self.overlay is not None
+            QtWidgets.QMessageBox.warning(
+                self.overlay,
+                "Traducción",
+                f"No se pudo actualizar el traductor: {exc}\nSe mantiene el ASR.",
+            )
+
     def open_settings(self) -> None:
         assert self.overlay is not None
         dlg = SettingsDialog(self.overlay, self.config)
@@ -98,7 +112,7 @@ class AppController:
 
         new_cfg = validate_config(dlg.result_config())
         new_cfg["window_pos"] = self.overlay.current_position()
-        restart_keys = (
+        asr_restart_keys = (
             "language",
             "model",
             "audio_monitor",
@@ -107,17 +121,24 @@ class AppController:
             "use_vad",
             "latency_mode",
             "latency_profiles",
+        )
+        translation_keys = (
             "translation_enabled",
             "translation_target",
             "translator_model",
         )
-        restart_needed = any(new_cfg.get(k) != self.config.get(k) for k in restart_keys)
+        asr_restart = any(new_cfg.get(k) != self.config.get(k) for k in asr_restart_keys)
+        translation_only = (not asr_restart) and any(
+            new_cfg.get(k) != self.config.get(k) for k in translation_keys
+        )
         self.config = new_cfg
         self._save_config(self.config)
         self.overlay.apply_config(self.config)
 
-        if restart_needed:
+        if asr_restart:
             self._restart_pipeline_safe()
+        elif translation_only:
+            self._hot_swap_translator()
 
     def shutdown(self) -> None:
         if self._shutting_down:
