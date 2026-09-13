@@ -9,6 +9,7 @@ from src.asr.engine import WhisperEngine
 from src.asr.streaming import LocalAgreementStreamer
 from src.asr.types import CaptionUpdate
 from src.audio.capture import AudioRingBuffer, ChunkPump, SystemAudioCapture
+from src.config import beam_size_for_mode, effective_latency_profile
 
 
 class AsrPipeline:
@@ -23,7 +24,11 @@ class AsrPipeline:
         self._thread: threading.Thread | None = None
         self._capture: SystemAudioCapture | None = None
         self._engine: WhisperEngine | None = None
-        self._streamer = LocalAgreementStreamer(agreement_n=int(config.get("agreement_n", 2)))
+        profile = effective_latency_profile(config)
+        self._streamer = LocalAgreementStreamer(
+            agreement_n=int(profile["agreement_n"]),
+            max_latency_sec=float(profile["max_latency_sec"]),
+        )
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -33,6 +38,8 @@ class AsrPipeline:
         if not source:
             raise RuntimeError("Selecciona un dispositivo de audio (monitor) en configuración.")
 
+        profile = effective_latency_profile(self.config)
+        mode = str(self.config.get("latency_mode", "stable"))
         buffer = AudioRingBuffer(max_seconds=float(self.config.get("buffer_trimming_sec", 15.0)) + 5.0)
         self._capture = SystemAudioCapture(source_name=source, buffer=buffer)
         self._engine = WhisperEngine(
@@ -41,13 +48,16 @@ class AsrPipeline:
             compute_type=str(self.config.get("compute_type", "float16")),
             language=str(self.config.get("language", "en")),
             use_vad=bool(self.config.get("use_vad", True)),
-            beam_size=1 if self.config.get("latency_mode") == "low" else 5,
+            beam_size=beam_size_for_mode(mode),
         )
         self._engine.load()
         self._capture.start()
 
         self._stop.clear()
-        self._streamer.reset()
+        self._streamer = LocalAgreementStreamer(
+            agreement_n=int(profile["agreement_n"]),
+            max_latency_sec=float(profile["max_latency_sec"]),
+        )
         self._thread = threading.Thread(target=self._loop, name="asr-pipeline", daemon=True)
         self._thread.start()
 
@@ -62,9 +72,10 @@ class AsrPipeline:
 
     def _loop(self) -> None:
         assert self._capture is not None and self._engine is not None
+        profile = effective_latency_profile(self.config)
         pump = ChunkPump(
             self._capture.buffer,
-            min_chunk_seconds=float(self.config.get("min_chunk_seconds", 0.8)),
+            min_chunk_seconds=float(profile["min_chunk_seconds"]),
         )
         language = str(self.config.get("language", "en"))
         trim_sec = float(self.config.get("buffer_trimming_sec", 15.0))

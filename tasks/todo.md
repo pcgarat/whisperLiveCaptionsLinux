@@ -1,23 +1,18 @@
-# Tasks: Fase 1 — Subtítulos en directo
+# Tasks: Fase 2.1 — Modo baja latencia
 
-Spec: `docs/specs/fase1-subtitulos-directo-2026-09-13.md`  
+Spec: `docs/specs/fase2.1-baja-latencia-2026-09-13.md`  
 Plan: `tasks/plan.md`
 
-**Estado implementación:** Tasks 1–9 completadas (2026-09-13). Pendiente smoke manual ≥30 min del usuario.
+**Estado implementación:** Tasks 1–4 completadas (2026-09-13). Pendiente smoke manual `stable` vs `low`.
 
 ---
 
-## Task 1: Skeleton del repo ✅
-## Task 2: Config + CaptionUpdate ✅
-## Task 3: Política de streaming ✅
-## Task 4: Listado de dispositivos de audio ✅
-## Task 5: Captura continua en memoria ✅
-## Task 6: Motor faster-whisper + streaming ✅
-## Task 7: Overlay PyQt6 ✅
-## Task 8: Settings dialog ✅
-## Task 9: App wiring + cierre limpio + README ✅
+## Task 1: Config profiles + migración ✅
+## Task 2: Force-commit por latencia máxima ✅
+## Task 3: Pipeline usa profile efectivo ✅
+## Task 4: Settings UI + wiring (incl. reinicio por modo/profile) ✅
 
-### Checkpoint C — Fase 1 completa
-- [x] Código y tests unitarios (`pytest` 12 passed; CUDA smoke `tiny` OK)
-- [ ] Success criteria del spec (smoke manual usuario, ≥30 min)
+### Checkpoint B — Fase 2.1 completa
+- [x] Código y tests unitarios (`pytest` 18 passed)
+- [x] Success criteria manual del spec (`stable` vs `low`, persistencia, Restablecer) — confirmado por el usuario 2026-09-13
 - [x] Spec/plan/todo actualizados

@@ -1,85 +1,73 @@
-# Implementation Plan: Subtítulos en directo Linux — Fase 1
+# Implementation Plan: Fase 2.1 — Modo baja latencia
 
 ## Overview
 
-App única in-process: captura PipeWire → streaming ASR con `faster-whisper` → overlay PyQt6. Sin WhisperLive server y sin código del proyecto viejo. Objetivo: subtítulos EN estables (~1–3 s), sesión ≥30 min sin cuelgues.
+Activar `latency_mode` de verdad (`stable` | `low`) con profiles por modo (`agreement_n`, `max_latency_sec`, `min_chunk_seconds`), force-commit por techo de latencia, UI de settings (selector, sliders + tooltips, Restablecer) y migración de configs fase 1. Sin traducción (2.2).
 
-**Spec:** `docs/specs/fase1-subtitulos-directo-2026-09-13.md`  
-**Intent:** `docs/intent/subtitulos-directo-2026-09-13.md`
+**Spec:** `docs/specs/fase2.1-baja-latencia-2026-09-13.md`  
+**Intent:** `docs/intent/fase2.1-baja-latencia-2026-09-13.md`
 
 ## Architecture Decisions
 
-- **In-process (B):** un proceso; hilos worker para audio/ASR; UI solo cola + señales Qt.
-- **`faster-whisper` + política LocalAgreement propia:** texto provisional vs confirmado; evita reimplementar servidor Collabora.
-- **Audio en memoria:** ring buffer / chunks float32 16 kHz; cero WAV temporales por chunk.
-- **Contrato `CaptionUpdate`:** único puente ASR → UI (`text`, `is_final`, `language`, `ts_mono`).
-- **Extensibilidad sin implementar:** stub `Translator`, `latency_mode: stable`, `language` string en config.
-- **PyQt6 + modelo default `medium` + parcial discreto + confirmado.**
+- **Profiles por modo:** `latency_profiles.{stable|low}` es la fuente de verdad; el pipeline lee el profile efectivo del `latency_mode` activo.
+- **Factory presets inmutables en código** (`LATENCY_FACTORY_PRESETS`) para Restablecer y defaults.
+- **Migración suave:** configs fase 1 sin `latency_profiles` se rellenan; knobs top-level legacy alimentan el modo activo.
+- **Force-commit por tiempo** en el streamer/pipeline: red de seguridad además de LocalAgreement.
+- **`min_chunk` solo vía profile** (opción A): se quita el spinbox global de chunk para no duplicar fuentes.
+- **`beam_size`:** 5 en `stable`, 1 en `low`.
+- **Aplicar cambios:** guardar config + reiniciar pipeline (patrón actual de la app).
 
 ## Dependency Graph
 
 ```
-config + CaptionUpdate types
+LATENCY_FACTORY_PRESETS + validate/migrate config
     │
-    ├── audio devices / capture
+    ├── effective profile helpers
+    │
+    ├── LocalAgreementStreamer + max_latency force-commit
     │       │
-    │       └── asr engine + streaming policy
-    │               │
-    │               └── pipeline worker (capture → ASR → queue)
-    │                       │
-    │                       └── overlay + settings UI
-    │                               │
-    │                               └── app entry + run.sh
+    │       └── AsrPipeline (profile knobs + beam_size)
+    │
+    └── SettingsDialog (modo, sliders, tooltips, Restablecer)
+            │
+            └── app wiring + config.example + nota README
 ```
 
 ## Task List (vertical slices)
 
-### Phase A: Foundation
-- [ ] Task 1: Skeleton del repo (estructura, requirements, config, run.sh)
-- [ ] Task 2: Tipos `CaptionUpdate` + load/save config + tests
-- [ ] Task 3: Política de streaming (unit-tested, sin GPU)
+### Phase A: Config + streamer
+- Task 1: Profiles, migración, validación, `config.example.json`
+- Task 2: Force-commit por `max_latency_sec` + `agreement_n` dinámico (tests)
 
-### Checkpoint: Foundation
-- [ ] `pytest -q` verde
-- [ ] Estructura y config listos
-- [ ] Review humana opcional
+### Checkpoint A
+- `pytest` config + streaming verde
+- Config fase 1 migra sin romper arranque
 
-### Phase B: Audio + ASR core
-- [ ] Task 4: Listado de dispositivos Pulse/PipeWire (mockeable)
-- [ ] Task 5: Captura continua a buffer en memoria
-- [ ] Task 6: Motor `faster-whisper` + integración streaming
+### Phase B: Pipeline + UI
+- Task 3: Pipeline usa profile efectivo + `beam_size` formalizado
+- Task 4: Settings (modo, sliders, tooltips, Restablecer) + wiring app
 
-### Checkpoint: Core ASR
-- [ ] Captura + transcripción EN en CLI/smoke (sin UI completa)
-- [ ] Review humana recomendada (GPU/deps)
-
-### Phase C: UI + producto
-- [ ] Task 7: Overlay PyQt6 (parcial/confirmado, drag, always-on-top)
-- [ ] Task 8: Diálogo settings + persistencia
-- [ ] Task 9: App wiring (pipeline ↔ UI), cierre limpio, README checklist
-
-### Checkpoint: Complete
-- [ ] Success criteria del spec cumplidos (incl. smoke ≥30 min manual)
-- [ ] Listo para review / uso diario fase 1
+### Checkpoint B — Fase 2.1 completa
+- Success criteria del spec (manual `stable` vs `low`)
+- `pytest -q` verde
 
 ## Risks and Mitigations
 
 | Risk | Impact | Mitigation |
 |------|--------|------------|
-| CTranslate2/CUDA mismatch con driver 595 | High | Pin versions; documentar `ctranslate2` compatible; smoke temprano en Task 6 |
-| Captura PipeWire frágil (Bluetooth monitor) | Med | Selector de dispositivo; fallback documentado; reutilizar nombres `*.monitor` |
-| Política streaming mal afinada (parpadeo/latencia) | Med | Tests unitarios + defaults conservadores; `latency_mode` reservado |
-| Bloqueo UI / cuelgues (fallo del proyecto viejo) | High | ASR nunca en hilo Qt; watchdog de cola; shutdown cooperativo |
-| VRAM con `medium` + navegador | Low | Default `medium`; permitir `small` en config |
+| Force-commit prematuro ilegible | Med | Defaults conservadores en `stable`; tests de techo; tooltip claro |
+| Drift config legacy vs profiles | Med | Una sola fuente (`latency_profiles`); migración en `validate_config` |
+| `min_chunk=0.35` + GPU lenta → cola ASR | Med | Smoke manual en `low`; documentar subir confianza / volver a `stable` |
+| UI confusa al quitar spinbox chunk | Low | Nota en settings: el chunk lo fija el modo / Restablecer |
 
 ## Open Questions
 
-Ninguna bloqueante tras la aprobación del spec. Si Task 6 falla por CUDA, se pregunta antes de añadir Docker o cambiar de backend.
+Ninguna bloqueante tras la aprobación del spec.
 
 ## Verification (antes de IMPLEMENT)
 
-- [ ] Cada task tiene acceptance + verify
-- [ ] Orden por dependencias
-- [ ] Ninguna task > ~5 archivos de forma rutinaria
-- [ ] Checkpoints entre fases
-- [ ] Humano aprueba este plan
+- [x] Cada task tiene acceptance + verify en `tasks/todo.md`
+- [x] Orden por dependencias
+- [x] Tasks acotadas (~≤5 archivos)
+- [x] Checkpoints entre fases
+- [x] Humano aprueba este plan

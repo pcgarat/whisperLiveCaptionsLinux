@@ -15,7 +15,7 @@ from PyQt6 import QtWidgets
 from src.asr.pipeline import AsrPipeline
 from src.asr.types import CaptionUpdate
 from src.audio.devices import list_audio_monitors
-from src.config import load_config, save_config
+from src.config import load_config, save_config, validate_config
 from src.ui.overlay import SubtitleOverlay
 from src.ui.settings import SettingsDialog
 
@@ -88,12 +88,19 @@ class AppController:
         if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
             return
 
-        new_cfg = dlg.result_config()
+        new_cfg = validate_config(dlg.result_config())
         new_cfg["window_pos"] = self.overlay.current_position()
-        restart_needed = any(
-            new_cfg.get(k) != self.config.get(k)
-            for k in ("language", "model", "audio_monitor", "device", "compute_type", "use_vad")
+        restart_keys = (
+            "language",
+            "model",
+            "audio_monitor",
+            "device",
+            "compute_type",
+            "use_vad",
+            "latency_mode",
+            "latency_profiles",
         )
+        restart_needed = any(new_cfg.get(k) != self.config.get(k) for k in restart_keys)
         self.config = new_cfg
         self._save_config(self.config)
         self.overlay.apply_config(self.config)

@@ -42,3 +42,46 @@ def test_reset_clears_state() -> None:
     assert s.committed == ""
     r = s.push("New text here")
     assert r.committed == ""
+
+
+def test_agreement_n_one_commits_first_hypothesis() -> None:
+    s = LocalAgreementStreamer(agreement_n=1, max_latency_sec=5.0)
+    r = s.push("Hello world")
+    assert r.newly_committed == "Hello world"
+    assert r.committed == "Hello world"
+    assert r.partial == ""
+
+
+def test_force_commit_after_max_latency() -> None:
+    clock = {"t": 0.0}
+
+    def now() -> float:
+        return clock["t"]
+
+    s = LocalAgreementStreamer(agreement_n=2, max_latency_sec=1.0, clock=now)
+    r1 = s.push("One path alpha")
+    assert r1.newly_committed == ""
+    assert r1.partial
+
+    clock["t"] = 0.5
+    r2 = s.push("Two path beta")
+    assert r2.newly_committed == ""
+
+    clock["t"] = 1.2
+    r3 = s.push("Two path beta longer")
+    assert r3.newly_committed
+    assert "path" in r3.committed.lower() or "Two" in r3.committed
+
+
+def test_no_force_commit_before_max_latency() -> None:
+    clock = {"t": 0.0}
+
+    def now() -> float:
+        return clock["t"]
+
+    s = LocalAgreementStreamer(agreement_n=2, max_latency_sec=2.0, clock=now)
+    s.push("Alpha one")
+    clock["t"] = 1.0
+    r = s.push("Beta two")
+    assert r.newly_committed == ""
+    assert r.partial
