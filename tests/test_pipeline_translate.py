@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import queue
+import threading
 
 from src.asr.pipeline import AsrPipeline, translate_confirmed
 from src.asr.translate import NullTranslator
@@ -131,3 +132,119 @@ def test_apply_translation_settings_decode_only_keeps_translator() -> None:
     _, _, second, decode = pipeline.translation_snapshot()
     assert second is first
     assert decode == TRANSLATION_FACTORY_PRESETS["quality"]
+
+
+def test_emit_committed_translates_delta_and_appends_flag() -> None:
+    q: queue.Queue = queue.Queue()
+    t = RecordingTranslator()
+    cfg = validate_config(
+        {
+            "translation_enabled": True,
+            "language": "en",
+            "translation_target": "es",
+            "device": "cpu",
+        }
+    )
+    pipeline = AsrPipeline(cfg, q, translator=t)
+    pipeline._emit_committed("Hello", language="en", now=1.0)
+    pipeline.flush_translations()
+    pipeline._emit_committed("Hello world", language="en", now=2.0)
+    pipeline.flush_translations()
+
+    items = []
+    while True:
+        try:
+            items.append(q.get_nowait())
+        except queue.Empty:
+            break
+
+    # ASR + TX por cada commit (worker al día, sin coalesce)
+    assert [i.seq for i in items] == [1, 1, 2, 2]
+    assert items[0].translated_text is None
+    assert items[1].translated_text == "ES:Hello"
+    assert items[1].translation_append is False
+    assert items[2].text == "Hello world"
+    assert items[2].translated_text is None
+    assert items[3].translated_text == "ES:world"
+    assert items[3].translation_append is True
+    assert t.calls[0][0] == "Hello"
+    assert t.calls[1][0] == "world"
+    pipeline.stop()
+
+
+def test_emit_committed_skips_rewind() -> None:
+    q: queue.Queue = queue.Queue()
+    t = RecordingTranslator()
+    cfg = validate_config(
+        {
+            "translation_enabled": True,
+            "language": "en",
+            "translation_target": "es",
+            "device": "cpu",
+        }
+    )
+    pipeline = AsrPipeline(cfg, q, translator=t)
+    pipeline._emit_committed("Hello world today", language="en", now=1.0)
+    pipeline.flush_translations()
+    while not q.empty():
+        q.get_nowait()
+    t.calls.clear()
+
+    pipeline._emit_committed("Hello world", language="en", now=2.0)
+    pipeline.flush_translations()
+    assert q.empty()
+    assert t.calls == []
+    pipeline.stop()
+
+
+def test_tx_worker_coalesces_to_latest_span() -> None:
+    """Si hay backlog, traduce desde la última base hasta el committed más reciente."""
+    q: queue.Queue = queue.Queue()
+    gate = threading.Event()
+    release = threading.Event()
+
+    class BlockingTranslator(RecordingTranslator):
+        def translate(
+            self,
+            text: str,
+            source_lang: str,
+            target_lang: str = "es",
+            decode: dict[str, float | int] | None = None,
+        ) -> str:
+            gate.set()
+            release.wait(timeout=2.0)
+            return super().translate(text, source_lang, target_lang, decode)
+
+    t = BlockingTranslator()
+    cfg = validate_config(
+        {
+            "translation_enabled": True,
+            "language": "en",
+            "translation_target": "es",
+            "device": "cpu",
+        }
+    )
+    pipeline = AsrPipeline(cfg, q, translator=t)
+    pipeline._emit_committed("Hello", language="en", now=1.0)
+    assert gate.wait(timeout=2.0)
+
+    pipeline._emit_committed("Hello world", language="en", now=2.0)
+    pipeline._emit_committed("Hello world today", language="en", now=3.0)
+    release.set()
+    pipeline.flush_translations()
+
+    tx_items = []
+    while True:
+        try:
+            item = q.get_nowait()
+        except queue.Empty:
+            break
+        if item.translated_text is not None:
+            tx_items.append(item)
+
+    # Primera TX (Hello) puede haberse descartado por coalesce; la final cubre el span.
+    assert tx_items[-1].seq == 3
+    assert tx_items[-1].translated_text == "ES:Hello world today"
+    assert tx_items[-1].translation_append is False
+    assert any(call[0] == "Hello world today" for call in t.calls)
+    pipeline.stop()

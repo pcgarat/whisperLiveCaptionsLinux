@@ -4,6 +4,7 @@ import logging
 import queue
 import threading
 import time
+from dataclasses import dataclass
 from typing import Any
 
 from src.asr.engine import WhisperEngine
@@ -18,6 +19,13 @@ from src.config import (
 )
 
 logger = logging.getLogger(__name__)
+
+
+@dataclass(frozen=True)
+class _TxJob:
+    seq: int
+    committed: str
+    language: str
 
 
 def translate_confirmed(
@@ -71,6 +79,15 @@ class AsrPipeline:
             agreement_n=int(profile["agreement_n"]),
             max_latency_sec=float(profile["max_latency_sec"]),
         )
+        self._caption_seq = 0
+        self._last_committed = ""
+        self._tx_stop = threading.Event()
+        self._tx_thread: threading.Thread | None = None
+        self._tx_pending_lock = threading.Lock()
+        self._tx_pending_cv = threading.Condition(self._tx_pending_lock)
+        self._tx_pending: _TxJob | None = None
+        self._tx_busy = False
+        self._last_tx_committed = ""
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -105,6 +122,12 @@ class AsrPipeline:
             agreement_n=int(profile["agreement_n"]),
             max_latency_sec=float(profile["max_latency_sec"]),
         )
+        self._caption_seq = 0
+        self._last_committed = ""
+        with self._tx_pending_lock:
+            self._last_tx_committed = ""
+            self._tx_pending = None
+        self._ensure_tx_worker()
         self._thread = threading.Thread(
             target=self._loop, name="asr-pipeline", daemon=True
         )
@@ -171,6 +194,158 @@ class AsrPipeline:
             decode = effective_translation_decode(self.config)
             return enabled, target, self._translator, decode
 
+    def _ensure_tx_worker(self) -> None:
+        if self._tx_thread is not None and self._tx_thread.is_alive():
+            return
+        self._tx_stop.clear()
+        self._tx_thread = threading.Thread(
+            target=self._tx_loop, name="tx-worker", daemon=True
+        )
+        self._tx_thread.start()
+
+    def _stop_tx_worker(self, timeout: float = 3.0) -> None:
+        self._tx_stop.set()
+        with self._tx_pending_cv:
+            self._tx_pending = None
+            self._tx_pending_cv.notify_all()
+        if self._tx_thread is not None:
+            self._tx_thread.join(timeout=timeout)
+        self._tx_thread = None
+
+    def _schedule_translation(self, job: _TxJob) -> None:
+        self._ensure_tx_worker()
+        with self._tx_pending_cv:
+            self._tx_pending = job
+            self._tx_pending_cv.notify()
+
+    def flush_translations(self, timeout: float = 2.0) -> None:
+        """Espera a que el worker vacíe el pendiente (tests / apagado ordenado)."""
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            with self._tx_pending_lock:
+                idle = self._tx_pending is None and not self._tx_busy
+            if idle:
+                return
+            time.sleep(0.01)
+        raise TimeoutError("timeout esperando traducciones pendientes")
+
+    def _tx_loop(self) -> None:
+        while not self._tx_stop.is_set():
+            with self._tx_pending_cv:
+                while self._tx_pending is None and not self._tx_stop.is_set():
+                    self._tx_pending_cv.wait(timeout=0.2)
+                if self._tx_stop.is_set():
+                    return
+                job = self._tx_pending
+                self._tx_pending = None
+                self._tx_busy = True
+
+            assert job is not None
+            try:
+                self._process_tx_job(job)
+            finally:
+                with self._tx_pending_lock:
+                    self._tx_busy = False
+                    self._tx_pending_cv.notify_all()
+
+    def _process_tx_job(self, job: _TxJob) -> None:
+        while not self._tx_stop.is_set():
+            with self._tx_pending_lock:
+                newer = self._tx_pending
+                if newer is not None and newer.seq > job.seq:
+                    job = newer
+                    self._tx_pending = None
+                    continue
+                base = self._last_tx_committed
+
+            if base and job.committed.startswith(base) and job.committed != base:
+                to_translate = job.committed[len(base) :].strip()
+                append = True
+            else:
+                to_translate = job.committed
+                append = False
+
+            if not to_translate:
+                with self._tx_pending_lock:
+                    self._last_tx_committed = job.committed
+                return
+
+            translation_enabled, target_lang, translator, decode = (
+                self.translation_snapshot()
+            )
+            translated = translate_confirmed(
+                to_translate,
+                source_lang=job.language,
+                target_lang=target_lang,
+                translation_enabled=translation_enabled,
+                translator=translator,
+                decode=decode,
+            )
+
+            payload: CaptionUpdate | None = None
+            with self._tx_pending_lock:
+                newer = self._tx_pending
+                if newer is not None and newer.seq > job.seq:
+                    # Coalesce: no emitir ni avanzar base; el siguiente job cubre el hueco.
+                    job = newer
+                    self._tx_pending = None
+                    continue
+
+                if translated is not None:
+                    payload = CaptionUpdate(
+                        text=job.committed,
+                        is_final=True,
+                        language=job.language,
+                        ts_mono=time.monotonic(),
+                        translated_text=translated,
+                        seq=job.seq,
+                        translation_append=append,
+                    )
+                self._last_tx_committed = job.committed
+
+            if payload is not None:
+                self.out_queue.put(payload)
+            return
+
+    def _emit_committed(self, committed: str, *, language: str, now: float) -> None:
+        """Emite confirmado al instante; encola traducción async con coalescing."""
+        prev = self._last_committed
+        if prev and prev.startswith(committed) and committed != prev:
+            # Force-commit / solape post-trim que acorta lo ya mostrado: no pisar.
+            return
+
+        is_extension = bool(prev) and committed.startswith(prev) and committed != prev
+        if is_extension:
+            delta = committed[len(prev) :].strip()
+            if not delta:
+                self._last_committed = committed
+                return
+
+        self._caption_seq += 1
+        seq = self._caption_seq
+        self._last_committed = committed
+
+        self.out_queue.put(
+            CaptionUpdate(
+                text=committed,
+                is_final=True,
+                language=language,
+                ts_mono=now,
+                seq=seq,
+                translation_append=is_extension,
+            )
+        )
+
+        translation_enabled, target_lang, _, _ = self.translation_snapshot()
+        src = language.strip().lower()
+        tgt = (target_lang or "es").strip().lower() or "es"
+        if not translation_enabled or src == tgt or not committed.strip():
+            return
+
+        self._schedule_translation(
+            _TxJob(seq=seq, committed=committed, language=language)
+        )
+
     def stop(self, timeout: float = 3.0) -> None:
         self._stop.set()
         if self._capture is not None:
@@ -179,6 +354,7 @@ class AsrPipeline:
             self._thread.join(timeout=timeout)
         self._thread = None
         self._capture = None
+        self._stop_tx_worker(timeout=timeout)
 
     def _loop(self) -> None:
         assert self._capture is not None and self._engine is not None
@@ -216,26 +392,7 @@ class AsrPipeline:
             result = self._streamer.push(hypothesis)
             now = time.monotonic()
             if result.newly_committed:
-                translation_enabled, target_lang, translator, decode = (
-                    self.translation_snapshot()
-                )
-                translated = translate_confirmed(
-                    result.committed,
-                    source_lang=language,
-                    target_lang=target_lang,
-                    translation_enabled=translation_enabled,
-                    translator=translator,
-                    decode=decode,
-                )
-                self.out_queue.put(
-                    CaptionUpdate(
-                        text=result.committed,
-                        is_final=True,
-                        language=language,
-                        ts_mono=now,
-                        translated_text=translated,
-                    )
-                )
+                self._emit_committed(result.committed, language=language, now=now)
             if result.partial:
                 display = (result.committed + " " + result.partial).strip()
                 self.out_queue.put(
@@ -257,3 +414,7 @@ class AsrPipeline:
                     self._capture.buffer.clear()
                     self._capture.buffer.write(keep[-keep_samples:])
                     self._streamer.reset()
+                    self._last_committed = ""
+                    with self._tx_pending_lock:
+                        self._last_tx_committed = ""
+                        self._tx_pending = None

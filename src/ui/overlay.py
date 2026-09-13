@@ -33,6 +33,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self._final_text = ""
         self._partial_text = ""
         self._translated_text = ""
+        self._caption_seq = 0
         self._drag_offset: QtCore.QPoint | None = None
         self._always_on_top = bool(config.get("always_on_top", True))
         self._ignore_move_save = False
@@ -467,6 +468,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self.config["translation_enabled"] = bool(enabled)
         if not enabled:
             self._translated_text = ""
+            self._caption_seq = 0
         self._sync_translation_ui()
         if self.on_save_config is not None:
             self.on_save_config(self.config)
@@ -504,6 +506,12 @@ class SubtitleOverlay(QtWidgets.QWidget):
         if self.on_restart_pipeline is not None:
             self.on_restart_pipeline()
 
+    def _apply_translated_text(self, text: str, *, append: bool) -> None:
+        if append and self._translated_text:
+            self._translated_text = f"{self._translated_text} {text}".strip()
+        else:
+            self._translated_text = text
+
     def _poll_queue(self) -> None:
         updated = False
         while True:
@@ -512,10 +520,30 @@ class SubtitleOverlay(QtWidgets.QWidget):
             except queue.Empty:
                 break
             if item.is_final:
-                self._final_text = item.text
-                self._partial_text = ""
-                if item.translated_text is not None:
-                    self._translated_text = item.translated_text
+                if item.seq < self._caption_seq:
+                    # Traducción o revisión tardía de una frase que ya no está en pantalla.
+                    continue
+                prev_final = self._final_text
+                if item.seq > self._caption_seq:
+                    extending = bool(prev_final) and item.text.startswith(prev_final)
+                    self._caption_seq = item.seq
+                    self._final_text = item.text
+                    self._partial_text = ""
+                    if item.translated_text is not None:
+                        self._apply_translated_text(
+                            item.translated_text, append=item.translation_append
+                        )
+                    elif not extending:
+                        # Nuevo segmento sin ES aún: no dejar la frase anterior.
+                        self._translated_text = ""
+                else:
+                    if item.text:
+                        self._final_text = item.text
+                    self._partial_text = ""
+                    if item.translated_text is not None:
+                        self._apply_translated_text(
+                            item.translated_text, append=item.translation_append
+                        )
             else:
                 if self._final_text and item.text.startswith(self._final_text):
                     self._partial_text = item.text[len(self._final_text) :].strip()
