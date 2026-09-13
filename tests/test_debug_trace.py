@@ -4,7 +4,7 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-from src.debug.trace import SessionTracer, config_snapshot
+from src.debug.trace import SessionTracer, config_snapshot, diff_config
 
 
 def test_config_snapshot_keeps_tuning_knobs_only() -> None:
@@ -22,6 +22,16 @@ def test_config_snapshot_keeps_tuning_knobs_only() -> None:
     assert snap["translation_enabled"] is True
     assert "font_size" not in snap
     assert "window_pos" not in snap
+
+
+def test_diff_config_reports_from_to() -> None:
+    changes = diff_config(
+        {"latency_mode": "stable", "translation_enabled": False},
+        {"latency_mode": "low", "translation_enabled": False},
+    )
+    assert changes == {
+        "latency_mode": {"from": "stable", "to": "low"},
+    }
 
 
 def test_session_tracer_flush_writes_summary(tmp_path: Path) -> None:
@@ -47,15 +57,26 @@ def test_session_tracer_flush_writes_summary(tmp_path: Path) -> None:
         is_partial=False,
         ts_mono=100.5,
     )
+    assert tracer.note_config(
+        {"language": "en", "latency_mode": "low", "font_size": 99},
+        reason="settings",
+        applied="asr_restart",
+    )
+    assert not tracer.note_config(
+        {"language": "en", "latency_mode": "low", "font_size": 12},
+        reason="save",
+    )
 
     written = tracer.flush()
     assert written == path
     doc = json.loads(path.read_text(encoding="utf-8"))
     assert doc["schema_version"] == 1
-    assert doc["config"]["language"] == "en"
+    assert doc["config"]["latency_mode"] == "stable"
+    assert doc["config_final"]["latency_mode"] == "low"
     assert "font_size" not in doc["config"]
     assert doc["summary"]["commits"] == 1
     assert doc["summary"]["coalesce_skips"] == 1
+    assert doc["summary"]["config_changes"] == 1
     assert doc["summary"]["asr_infer"]["count"] == 1
     assert doc["summary"]["tx_lag"]["count"] == 1
     assert doc["summary"]["tx_lag"]["p50_ms"] == 300.0
@@ -64,3 +85,8 @@ def test_session_tracer_flush_writes_summary(tmp_path: Path) -> None:
     assert "commit" in types
     assert "tx_coalesce_skip" in types
     assert "tx_done" in types
+    assert "config_change" in types
+    change = next(e for e in doc["events"] if e["type"] == "config_change")
+    assert change["keys"] == ["latency_mode"]
+    assert change["changes"]["latency_mode"] == {"from": "stable", "to": "low"}
+    assert change["applied"] == "asr_restart"
