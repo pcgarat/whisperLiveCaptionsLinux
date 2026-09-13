@@ -30,6 +30,8 @@ _CONFIG_KEYS = (
     "translation_decode_preset",
     "translation_profiles",
     "second_line_mode",
+    "captions_show_partials",
+    "captions_allow_rewrite",
 )
 
 _TEXT_PREVIEW = 160
@@ -104,6 +106,20 @@ def config_snapshot(config: dict[str, Any]) -> dict[str, Any]:
     return out
 
 
+def diff_config(
+    before: dict[str, Any], after: dict[str, Any]
+) -> dict[str, dict[str, Any]]:
+    """Diff de knobs de tuning: {clave: {from, to}}."""
+    keys = set(before) | set(after)
+    changes: dict[str, dict[str, Any]] = {}
+    for key in sorted(keys):
+        old = before.get(key)
+        new = after.get(key)
+        if old != new:
+            changes[key] = {"from": deepcopy(old), "to": deepcopy(new)}
+    return changes
+
+
 class SessionTracer:
     """Acumula eventos de pipeline y vuelca un JSON al cerrar."""
 
@@ -119,7 +135,9 @@ class SessionTracer:
         self._lock = threading.Lock()
         self._wall_start = wall_start or datetime.now(timezone.utc)
         self._mono_start = mono_start if mono_start is not None else time.monotonic()
-        self._config = config_snapshot(config or {})
+        snap = config_snapshot(config or {})
+        self._config_initial = deepcopy(snap)
+        self._config = snap
         self._events: list[dict[str, Any]] = []
         self._truncated = False
         self._commit_ts: dict[int, float] = {}
@@ -133,6 +151,7 @@ class SessionTracer:
         self._tx_emits = 0
         self._asr_errors = 0
         self._buffer_trims = 0
+        self._config_change_count = 0
         self._closed = False
 
     def record(self, event_type: str, **fields: Any) -> None:
@@ -178,6 +197,32 @@ class SessionTracer:
         with self._lock:
             self._asr_errors += 1
         self.record("asr_error", message=_preview(message) or "")
+
+    def note_config(
+        self,
+        config: dict[str, Any],
+        *,
+        reason: str = "save",
+        applied: str | None = None,
+    ) -> bool:
+        """Registra cambios de knobs respecto al último snapshot conocido."""
+        new_snap = config_snapshot(config)
+        with self._lock:
+            if self._closed:
+                return False
+            changes = diff_config(self._config, new_snap)
+            if not changes:
+                return False
+            self._config = new_snap
+            self._config_change_count += 1
+        self.record(
+            "config_change",
+            reason=reason,
+            applied=applied,
+            keys=sorted(changes.keys()),
+            changes=changes,
+        )
+        return True
 
     def commit(
         self, *, seq: int, text: str, is_extension: bool, ts_mono: float | None = None
@@ -279,6 +324,7 @@ class SessionTracer:
                 "coalesce_skips": self._coalesce_skips,
                 "asr_errors": self._asr_errors,
                 "buffer_trims": self._buffer_trims,
+                "config_changes": self._config_change_count,
                 "asr_infer": _stats(list(self._asr_infer_ms)),
                 "asr_rtf": {
                     "count": len(self._asr_rtf),
@@ -300,7 +346,8 @@ class SessionTracer:
                 "schema_version": SCHEMA_VERSION,
                 "started_at": self._wall_start.isoformat(),
                 "ended_at": wall_end.isoformat() if wall_end else None,
-                "config": deepcopy(self._config),
+                "config": deepcopy(self._config_initial),
+                "config_final": deepcopy(self._config),
                 "summary": summary,
                 "events": list(self._events),
             }

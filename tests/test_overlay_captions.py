@@ -22,10 +22,14 @@ def qapp() -> QtWidgets.QApplication:
     return app
 
 
-def _overlay(qapp: QtWidgets.QApplication) -> tuple[SubtitleOverlay, queue.Queue]:
+def _overlay(
+    qapp: QtWidgets.QApplication,
+    *,
+    cfg: dict | None = None,
+) -> tuple[SubtitleOverlay, queue.Queue]:
     del qapp
     q: queue.Queue[CaptionUpdate] = queue.Queue()
-    cfg = {
+    base = {
         "language": "en",
         "translation_enabled": True,
         "translation_target": "es",
@@ -36,7 +40,9 @@ def _overlay(qapp: QtWidgets.QApplication) -> tuple[SubtitleOverlay, queue.Queue
         "font_color": "#FFFFFF",
         "bg_opacity": 0.55,
     }
-    ov = SubtitleOverlay(text_queue=q, config=cfg)
+    if cfg:
+        base.update(cfg)
+    ov = SubtitleOverlay(text_queue=q, config=base)
     ov._timer.stop()
     return ov, q
 
@@ -195,7 +201,8 @@ def test_new_segment_keeps_old_translation_until_ready(
         )
     )
     ov._poll_queue()
-    assert ov._final_text == "Brand new"
+    # Sin prefijo común: no borra scrollback; la divergencia abre frase nueva.
+    assert ov._final_text == "Old Brand new"
     assert ov._translated_text == "Viejo"
     q.put(
         CaptionUpdate(
@@ -209,7 +216,7 @@ def test_new_segment_keeps_old_translation_until_ready(
         )
     )
     ov._poll_queue()
-    assert ov._translated_text == "Nuevo"
+    assert ov._translated_text == "Viejo Nuevo"
     ov.close()
 
 
@@ -243,4 +250,552 @@ def test_partial_can_carry_translation(qapp: QtWidgets.QApplication) -> None:
     assert ov._final_text == "Hello"
     assert ov._partial_text == "world"
     assert ov._translated_text == "Hola mundo"
+    ov.close()
+
+
+def test_notice_shows_without_changing_captions(qapp: QtWidgets.QApplication) -> None:
+    ov, q = _overlay(qapp)
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Hola",
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    q.put(
+        CaptionUpdate(
+            text="",
+            is_final=False,
+            language="en",
+            ts_mono=now,
+            notice="Traducción en CPU (CUDA no disponible). Puede ir más lenta.",
+        )
+    )
+    ov._poll_queue()
+    assert ov._final_text == "Hello"
+    assert ov._translated_text == "Hola"
+    assert not ov.notice_label.isHidden()
+    assert "CPU" in ov.notice_label.text()
+    ov._clear_notice()
+    assert ov.notice_label.isHidden()
+    ov.close()
+
+
+def test_show_partials_false_ignores_partial(qapp: QtWidgets.QApplication) -> None:
+    ov, q = _overlay(qapp)
+    ov.config["captions_show_partials"] = False
+    ov.config["translation_enabled"] = False
+    ov._sync_translation_ui()
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    q.put(
+        CaptionUpdate(
+            text="Hello world",
+            is_final=False,
+            language="en",
+            ts_mono=now,
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    assert ov._final_text == "Hello"
+    assert ov._partial_text == ""
+    assert ov.partial_label.isHidden()
+    ov.close()
+
+
+def test_allow_rewrite_false_keeps_confirmed_text(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    ov, q = _overlay(qapp)
+    ov.config["captions_allow_rewrite"] = False
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello world",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    q.put(
+        CaptionUpdate(
+            text="Hello there",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            seq=2,
+        )
+    )
+    ov._poll_queue()
+    assert ov._final_text == "Hello world"
+    q.put(
+        CaptionUpdate(
+            text="Hello world today",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            seq=3,
+        )
+    )
+    ov._poll_queue()
+    assert ov._final_text == "Hello world today"
+    ov.close()
+
+
+def test_allow_rewrite_false_skips_tx_for_ignored_en_rewrite(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    ov, q = _overlay(qapp)
+    ov.config["captions_allow_rewrite"] = False
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello world",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Hola mundo",
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    q.put(
+        CaptionUpdate(
+            text="Hello there",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Hola allí",
+            seq=2,
+        )
+    )
+    ov._poll_queue()
+    assert ov._final_text == "Hello world"
+    assert ov._translated_text == "Hola mundo"
+    ov.close()
+
+
+def test_divergent_without_prefix_appends_scrollback(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    ov, q = _overlay(qapp)
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Long confirmed monologue about cats",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    q.put(
+        CaptionUpdate(
+            text="Dogs are great pets",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            seq=2,
+        )
+    )
+    ov._poll_queue()
+    assert ov._final_text == (
+        "Long confirmed monologue about cats Dogs are great pets"
+    )
+    assert ov._phrase_final == "Dogs are great pets"
+    ov.close()
+
+
+def test_divergent_with_shared_prefix_rewrites_phrase(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    ov, q = _overlay(qapp)
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="First",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    q.put(
+        CaptionUpdate(
+            text="",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            reset_display=True,
+        )
+    )
+    ov._poll_queue()
+    q.put(
+        CaptionUpdate(
+            text="Hello world",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            seq=2,
+        )
+    )
+    ov._poll_queue()
+    q.put(
+        CaptionUpdate(
+            text="Hello there",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            seq=3,
+        )
+    )
+    ov._poll_queue()
+    assert ov._final_text == "First Hello there"
+    assert ov._phrase_final == "Hello there"
+    ov.close()
+
+
+def test_reset_keeps_caption_and_appends_next_phrase(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    ov, q = _overlay(qapp)
+    ov.config["captions_allow_rewrite"] = False
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="First",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Primero",
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    q.put(
+        CaptionUpdate(
+            text="",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            reset_display=True,
+        )
+    )
+    ov._poll_queue()
+    assert ov._final_text == "First"
+    assert ov._translated_text == "Primero"
+    q.put(
+        CaptionUpdate(
+            text="Second",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Segundo",
+            seq=2,
+        )
+    )
+    ov._poll_queue()
+    assert ov._final_text == "First Second"
+    assert ov._translated_text == "Primero Segundo"
+    q.put(
+        CaptionUpdate(
+            text="Second more",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Segundo mas",
+            seq=3,
+        )
+    )
+    ov._poll_queue()
+    assert ov._final_text == "First Second more"
+    assert ov._translated_text == "Primero Segundo mas"
+    ov.close()
+
+
+def test_reset_appends_when_overlay_overflows(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    ov, q = _overlay(qapp)
+    now = time.monotonic()
+    packed = "word " * 80
+    q.put(
+        CaptionUpdate(
+            text=packed,
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text=packed,
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    q.put(
+        CaptionUpdate(
+            text="",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            reset_display=True,
+        )
+    )
+    ov._poll_queue()
+    q.put(
+        CaptionUpdate(
+            text="Next",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Siguiente",
+            seq=2,
+        )
+    )
+    ov._poll_queue()
+    assert ov._final_text.endswith("Next")
+    assert packed.strip().split()[0] in ov._final_text
+    assert ov._translated_text.endswith("Siguiente")
+    ov.close()
+
+
+def test_resize_hit_test_detects_edges(qapp: QtWidgets.QApplication) -> None:
+    from PyQt6 import QtCore
+
+    ov, _q = _overlay(qapp)
+    ov.resize(400, 200)
+    assert ov._hit_test_resize(QtCore.QPoint(4, 100)) == (True, False, False, False)
+    assert ov._hit_test_resize(QtCore.QPoint(396, 100)) == (False, True, False, False)
+    assert ov._hit_test_resize(QtCore.QPoint(200, 4)) == (False, False, True, False)
+    assert ov._hit_test_resize(QtCore.QPoint(200, 196)) == (False, False, False, True)
+    assert ov._hit_test_resize(QtCore.QPoint(200, 100)) is None
+    ov.close()
+
+
+def test_resize_from_right_updates_width(qapp: QtWidgets.QApplication) -> None:
+    from PyQt6 import QtCore
+
+    ov, _q = _overlay(qapp)
+    ov.resize(400, 200)
+    ov.show()
+    start = QtCore.QPoint(400, 100)
+    ov._begin_resize((False, True, False, False), start)
+    ov._continue_resize(start + QtCore.QPoint(80, 0))
+    assert ov.width() == 480
+    ov._handle_mouse_release()
+    assert ov.config["window_width"] == 480
+    assert ov.config["window_height"] == 200
+    ov.close()
+
+
+def test_caption_scroll_pins_to_bottom(qapp: QtWidgets.QApplication) -> None:
+    ov, q = _overlay(qapp)
+    ov.resize(800, 220)
+    ov.show()
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="word " * 80,
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    qapp.processEvents()
+    ov._apply_caption_geometry()
+    qapp.processEvents()
+    bar = ov._caption_scroll.verticalScrollBar()
+    assert bar.maximum() > 0
+    assert bar.value() == bar.maximum()
+    ov.close()
+
+
+def test_reset_display_keeps_caption_until_next_phrase(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    ov, q = _overlay(qapp)
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Hola",
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    q.put(
+        CaptionUpdate(
+            text="",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            reset_display=True,
+        )
+    )
+    ov._poll_queue()
+    assert ov._final_text == "Hello"
+    assert ov._partial_text == ""
+    assert ov._translated_text == "Hola"
+    assert ov._pending_new_phrase is True
+    ov.close()
+
+
+def test_apply_config_text_align_left(qapp: QtWidgets.QApplication) -> None:
+    from PyQt6 import QtCore
+
+    ov, _q = _overlay(qapp)
+    assert (
+        ov.final_label.alignment() & QtCore.Qt.AlignmentFlag.AlignHCenter
+        == QtCore.Qt.AlignmentFlag.AlignHCenter
+    )
+    cfg = dict(ov.config)
+    cfg["text_align"] = "left"
+    ov.apply_config(cfg)
+    assert (
+        ov.final_label.alignment() & QtCore.Qt.AlignmentFlag.AlignLeft
+        == QtCore.Qt.AlignmentFlag.AlignLeft
+    )
+    assert (
+        ov.translated_label.alignment() & QtCore.Qt.AlignmentFlag.AlignLeft
+        == QtCore.Qt.AlignmentFlag.AlignLeft
+    )
+    assert (
+        ov.partial_label.alignment() & QtCore.Qt.AlignmentFlag.AlignLeft
+        == QtCore.Qt.AlignmentFlag.AlignLeft
+    )
+    ov.close()
+
+
+def test_second_line_none_hides_asr_with_translation(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    ov, q = _overlay(qapp, cfg={"second_line_mode": "none"})
+    ov.show()
+    qapp.processEvents()
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Hola",
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    assert ov._translated_text == "Hola"
+    assert ov.final_label.isHidden()
+    assert ov.final_label.text() == ""
+    ov.close()
+
+
+def test_second_line_original_without_translation(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    ov, q = _overlay(
+        qapp,
+        cfg={"translation_enabled": False, "second_line_mode": "original"},
+    )
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            seq=1,
+        )
+    )
+    q.put(
+        CaptionUpdate(
+            text="Hello world",
+            is_final=False,
+            language="en",
+            ts_mono=now,
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    assert "Hello world" not in ov.final_label.text()
+    assert "Hello" in ov.final_label.text()
+    ov.close()
+
+
+def test_second_line_live_asr_without_translation(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    ov, q = _overlay(
+        qapp,
+        cfg={"translation_enabled": False, "second_line_mode": "live_asr"},
+    )
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            seq=1,
+        )
+    )
+    q.put(
+        CaptionUpdate(
+            text="Hello world",
+            is_final=False,
+            language="en",
+            ts_mono=now,
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    assert "Hello world" in ov.final_label.text()
+    assert ov.partial_label.isHidden()
+    ov.close()
+
+
+def test_apply_config_second_line_mode(qapp: QtWidgets.QApplication) -> None:
+    ov, q = _overlay(qapp, cfg={"second_line_mode": "live_asr"})
+    ov.show()
+    qapp.processEvents()
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Hola",
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+    assert ov.final_label.isVisible()
+
+    cfg = dict(ov.config)
+    cfg["second_line_mode"] = "none"
+    ov.apply_config(cfg)
+    assert ov.final_label.isHidden()
     ov.close()

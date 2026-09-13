@@ -28,6 +28,13 @@ TRANSLATION_PRESET_LABELS: dict[str, str] = {
 # Con traducción ON: qué mostrar como segunda línea (nunca más de 2 líneas de caption).
 SECOND_LINE_MODES = ("live_asr", "original", "none")
 
+# Alineación horizontal del texto en el overlay.
+TEXT_ALIGN_MODES = ("center", "left")
+TEXT_ALIGN_LABELS: dict[str, str] = {
+    "center": "Centro",
+    "left": "Izquierda",
+}
+
 # Sticky: reutilizar tramos ya traducidos; partials también traduce la hipótesis.
 TRANSLATION_STICKY_MODES = ("off", "committed", "partials")
 TRANSLATION_STICKY_LABELS: dict[str, str] = {
@@ -51,6 +58,8 @@ DEFAULTS: dict[str, Any] = {
     "translation_target": "es",
     "translation_sticky_mode": "off",
     "second_line_mode": "live_asr",
+    "captions_show_partials": True,
+    "captions_allow_rewrite": True,
     "translator_model": "nllb-200-distilled-ct2",
     "translation_decode_preset": "balanced",
     "translation_profiles": {
@@ -63,8 +72,10 @@ DEFAULTS: dict[str, Any] = {
     "bg_color": "#000000",
     "bg_alpha": 0.55,
     "padding": 24,
+    "text_align": "center",
     "window_pos": None,
     "window_width": 900,
+    "window_height": None,
 }
 
 CONFIG_NAME = "config.json"
@@ -337,7 +348,14 @@ def validate_config(data: dict[str, Any]) -> dict[str, Any]:
     cfg["font_size"] = int(_clamp(int(cfg["font_size"]), 10, 100))
     cfg["bg_alpha"] = float(_clamp(float(cfg["bg_alpha"]), 0.05, 1.0))
     cfg["padding"] = int(_clamp(int(cfg["padding"]), 0, 100))
+    align = str(cfg.get("text_align") or "").strip().lower()
+    cfg["text_align"] = align if align in TEXT_ALIGN_MODES else "center"
     cfg["window_width"] = int(_clamp(int(cfg["window_width"]), 300, 2400))
+    height = cfg.get("window_height")
+    if height is None:
+        cfg["window_height"] = None
+    else:
+        cfg["window_height"] = int(_clamp(int(height), 120, 1600))
     cfg["buffer_trimming_sec"] = float(
         _clamp(float(cfg["buffer_trimming_sec"]), 5.0, 60.0)
     )
@@ -355,6 +373,8 @@ def validate_config(data: dict[str, Any]) -> dict[str, Any]:
     )
     cfg["second_line_mode"] = _normalize_second_line_mode(raw)
     cfg.pop("show_asr_line", None)
+    cfg["captions_show_partials"] = bool(cfg.get("captions_show_partials", True))
+    cfg["captions_allow_rewrite"] = bool(cfg.get("captions_allow_rewrite", True))
     cfg["translation_target"] = (
         str(cfg.get("translation_target") or "es").strip().lower() or "es"
     )

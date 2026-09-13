@@ -84,12 +84,22 @@ class AppController:
         self.shutdown()
         return code
 
-    def _save_config(self, cfg: dict | None = None) -> None:
+    def _save_config(
+        self,
+        cfg: dict | None = None,
+        *,
+        trace_reason: str = "save",
+        trace_applied: str | None = None,
+    ) -> None:
         if cfg is not None:
             self.config = cfg
         if self.overlay is not None:
             self.config["window_pos"] = self.overlay.current_position()
             self.config["window_width"] = self.overlay.width()
+        if self._tracer is not None and not self._shutting_down:
+            self._tracer.note_config(
+                self.config, reason=trace_reason, applied=trace_applied
+            )
         save_config(self.config, self.config_path)
 
     def _start_pipeline(self) -> None:
@@ -148,20 +158,37 @@ class AppController:
             "translation_decode_preset",
             "translation_profiles",
         )
+        display_keys = (
+            "captions_show_partials",
+            "captions_allow_rewrite",
+            "second_line_mode",
+        )
         asr_restart = any(
             new_cfg.get(k) != self.config.get(k) for k in asr_restart_keys
         )
         translation_only = (not asr_restart) and any(
             new_cfg.get(k) != self.config.get(k) for k in translation_keys
         )
+        if asr_restart:
+            applied = "asr_restart"
+        elif translation_only:
+            applied = "translation_hot_swap"
+        else:
+            applied = "none"
         self.config = new_cfg
-        self._save_config(self.config)
+        self._save_config(
+            self.config, trace_reason="settings", trace_applied=applied
+        )
         self.overlay.apply_config(self.config)
 
         if asr_restart:
             self._restart_pipeline_safe()
-        elif translation_only:
-            self._hot_swap_translator()
+        else:
+            if translation_only:
+                self._hot_swap_translator()
+            if self.pipeline is not None:
+                for key in display_keys:
+                    self.pipeline.config[key] = self.config[key]
 
     def shutdown(self) -> None:
         if self._shutting_down:

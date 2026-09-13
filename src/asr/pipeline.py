@@ -130,6 +130,7 @@ class AsrPipeline:
         )
         self._caption_seq = 0
         self._last_committed = ""
+        self._last_ui_committed = ""
         self._tx_stop = threading.Event()
         self._tx_thread: threading.Thread | None = None
         self._tx_pending_lock = threading.Lock()
@@ -175,6 +176,7 @@ class AsrPipeline:
         )
         self._caption_seq = 0
         self._last_committed = ""
+        self._last_ui_committed = ""
         with self._tx_pending_lock:
             self._last_tx_committed = ""
             self._tx_checkpoints = []
@@ -543,10 +545,11 @@ class AsrPipeline:
     def _emit_committed(self, committed: str, *, language: str, now: float) -> None:
         """Emite confirmado al instante; encola traducción async con coalescing.
 
-        Nunca se traga el ASR: un acortamiento del streamer se trata como
-        corrección in-place (replace), no como descarte. Descartar rewinds
-        desincronizaba `_last_committed` del streamer y bloqueaba commits
-        posteriores (síntoma: mucha habla sin salir al overlay).
+        Con `captions_allow_rewrite=false` solo se envía al overlay lo que
+        extiende el último texto ya mostrado (o el primer commit tras reset,
+        cuando `_last_ui_committed` está vacío).
+        El estado interno `_last_committed` sigue al streamer para no
+        desincronizar commits posteriores.
         """
         prev = self._last_committed
         is_extension = bool(prev) and committed.startswith(prev) and committed != prev
@@ -556,9 +559,18 @@ class AsrPipeline:
                 self._last_committed = committed
                 return
 
+        allow_rewrite = bool(self.config.get("captions_allow_rewrite", True))
+        ui_prev = self._last_ui_committed
+        if not allow_rewrite and ui_prev:
+            ui_extension = committed.startswith(ui_prev) and committed != ui_prev
+            if not ui_extension:
+                self._last_committed = committed
+                return
+
         self._caption_seq += 1
         seq = self._caption_seq
         self._last_committed = committed
+        self._last_ui_committed = committed
 
         self.out_queue.put(
             CaptionUpdate(
@@ -578,6 +590,8 @@ class AsrPipeline:
         self._maybe_schedule(committed, language=language, seq=seq, is_partial=False)
 
     def _emit_partial(self, display: str, *, language: str, now: float) -> None:
+        if not bool(self.config.get("captions_show_partials", True)):
+            return
         self.out_queue.put(
             CaptionUpdate(
                 text=display,
@@ -672,9 +686,19 @@ class AsrPipeline:
                     self._capture.buffer.write(keep[-keep_samples:])
                     self._streamer.reset()
                     self._last_committed = ""
+                    self._last_ui_committed = ""
                     with self._tx_pending_lock:
                         self._last_tx_committed = ""
                         self._tx_checkpoints = []
                         self._tx_pending = None
+                    self.out_queue.put(
+                        CaptionUpdate(
+                            text="",
+                            is_final=True,
+                            language=language,
+                            ts_mono=time.monotonic(),
+                            reset_display=True,
+                        )
+                    )
                     if self._tracer is not None:
                         self._tracer.buffer_trim(keep_sec=keep_sec)

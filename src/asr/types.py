@@ -16,3 +16,5 @@ class CaptionUpdate:
     translation_append: bool = False
     # Aviso operativo para el overlay (p. ej. fallback CPU); no altera captions.
     notice: str | None = None
+    # Tras buffer trim / nueva frase: limpia buffers de display en el overlay.
+    reset_display: bool = False

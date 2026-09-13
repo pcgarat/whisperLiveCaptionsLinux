@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import html
 import queue
 import subprocess
 from collections.abc import Callable
@@ -9,6 +10,22 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from src.asr.languages import language_label
 from src.asr.types import CaptionUpdate
+
+# Cola visible del overlay: suficiente para scrollear, sin crecer sin límite.
+_MAX_DISPLAY_CHARS = 4000
+# Viewport fijo: 3 líneas legibles con interlineado holgado.
+_CAPTION_VISIBLE_LINES = 3
+_CAPTION_LINE_GAP_PX = 12
+_CAPTION_BLOCK_SPACING = 10
+_CAPTION_LINE_HEIGHT = "1.45"
+_RESIZE_MARGIN = 8
+_MIN_WINDOW_WIDTH = 300
+_MAX_WINDOW_WIDTH = 2400
+_MIN_WINDOW_HEIGHT = 120
+_MAX_WINDOW_HEIGHT = 1600
+
+# (left, right, top, bottom)
+ResizeEdge = tuple[bool, bool, bool, bool]
 
 
 class SubtitleOverlay(QtWidgets.QWidget):
@@ -33,8 +50,14 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self._final_text = ""
         self._partial_text = ""
         self._translated_text = ""
+        self._phrase_final = ""
+        self._phrase_translated = ""
+        self._pending_new_phrase = False
         self._caption_seq = 0
         self._drag_offset: QtCore.QPoint | None = None
+        self._resize_edge: ResizeEdge | None = None
+        self._resize_start_pos: QtCore.QPoint | None = None
+        self._resize_start_geom: QtCore.QRect | None = None
         self._always_on_top = bool(config.get("always_on_top", True))
         self._ignore_move_save = False
         self._save_pos_timer = QtCore.QTimer(self)
@@ -72,7 +95,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_TranslucentBackground)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_ShowWithoutActivating)
         self.setAttribute(QtCore.Qt.WidgetAttribute.WA_Hover, True)
-        self.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+        self.setMouseTracking(True)
         self.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.customContextMenuRequested.connect(self._show_context_menu)
 
@@ -81,7 +104,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
 
         self.panel = QtWidgets.QFrame()
         self.panel.setObjectName("captionPanel")
-        self.panel.setCursor(QtCore.Qt.CursorShape.SizeAllCursor)
+        self.panel.setMouseTracking(True)
         self.panel.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
         self.panel.customContextMenuRequested.connect(
             lambda pos: self._show_context_menu(self.panel.mapToParent(pos))
@@ -127,37 +150,54 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self.notice_label = QtWidgets.QLabel("")
         self.notice_label.setObjectName("noticeLabel")
         self.notice_label.setWordWrap(True)
-        self.notice_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
         self.notice_label.setVisible(False)
+
+        self._caption_scroll = QtWidgets.QScrollArea()
+        self._caption_scroll.setObjectName("captionScroll")
+        self._caption_scroll.setFrameShape(QtWidgets.QFrame.Shape.NoFrame)
+        self._caption_scroll.setWidgetResizable(False)
+        self._caption_scroll.setHorizontalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._caption_scroll.setVerticalScrollBarPolicy(
+            QtCore.Qt.ScrollBarPolicy.ScrollBarAlwaysOff
+        )
+        self._caption_scroll.setAlignment(QtCore.Qt.AlignmentFlag.AlignBottom)
+        self._caption_scroll.viewport().setAutoFillBackground(False)
+
+        self._caption_body = QtWidgets.QWidget()
+        self._caption_body.setObjectName("captionBody")
+        body_layout = QtWidgets.QVBoxLayout(self._caption_body)
+        body_layout.setContentsMargins(0, 0, 0, 0)
+        body_layout.setSpacing(_CAPTION_BLOCK_SPACING)
 
         self.translated_label = QtWidgets.QLabel("")
         self.translated_label.setWordWrap(True)
-        self.translated_label.setAlignment(
-            QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter
-        )
         self.translated_label.setObjectName("translatedCaption")
 
         self.final_label = QtWidgets.QLabel("")
         self.final_label.setWordWrap(True)
-        self.final_label.setAlignment(
-            QtCore.Qt.AlignmentFlag.AlignHCenter | QtCore.Qt.AlignmentFlag.AlignVCenter
-        )
         self.final_label.setObjectName("finalCaption")
 
         self.partial_label = QtWidgets.QLabel("")
         self.partial_label.setWordWrap(True)
-        self.partial_label.setAlignment(QtCore.Qt.AlignmentFlag.AlignHCenter)
         self.partial_label.setObjectName("partialCaption")
+        self._apply_text_align()
+
+        body_layout.addWidget(self.translated_label)
+        body_layout.addWidget(self.final_label)
+        body_layout.addWidget(self.partial_label)
+        self._caption_scroll.setWidget(self._caption_body)
 
         panel_layout.addWidget(self.notice_label)
-        panel_layout.addWidget(self.translated_label)
-        panel_layout.addWidget(self.final_label)
-        panel_layout.addWidget(self.partial_label)
+        panel_layout.addWidget(self._caption_scroll, stretch=1)
         root.addWidget(self.panel)
 
         for widget in (
             self,
             self.panel,
+            self._caption_scroll,
+            self._caption_body,
             self.lang_label,
             self.notice_label,
             self.translated_label,
@@ -165,6 +205,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
             self.partial_label,
         ):
             widget.installEventFilter(self)
+            widget.setMouseTracking(True)
             widget.setContextMenuPolicy(QtCore.Qt.ContextMenuPolicy.CustomContextMenu)
 
         self.lang_label.customContextMenuRequested.connect(
@@ -180,9 +221,10 @@ class SubtitleOverlay(QtWidgets.QWidget):
             lambda pos: self._show_context_menu(self.partial_label.mapTo(self, pos))
         )
 
-        width = int(self.config.get("window_width", 900))
-        self.resize(width, 150)
+        width = self._clamp_window_width(int(self.config.get("window_width", 900)))
+        self.resize(width, self._window_height())
         self._restore_position()
+        self._apply_caption_geometry()
 
     def _saved_position(self) -> list[int] | None:
         pos = self.config.get("window_pos")
@@ -227,11 +269,13 @@ class SubtitleOverlay(QtWidgets.QWidget):
             return
         self.config["window_pos"] = [self.x(), self.y()]
         self.config["window_width"] = self.width()
+        self.config["window_height"] = self.height()
         self._save_pos_timer.start(250)
 
     def _persist_geometry(self) -> None:
         self.config["window_pos"] = [self.x(), self.y()]
         self.config["window_width"] = self.width()
+        self.config["window_height"] = self.height()
         if self.on_save_config is not None:
             self.on_save_config(self.config)
 
@@ -342,6 +386,202 @@ class SubtitleOverlay(QtWidgets.QWidget):
         except (FileNotFoundError, subprocess.SubprocessError):
             pass
 
+    def _caption_h_align(self) -> QtCore.Qt.AlignmentFlag:
+        align = str(self.config.get("text_align") or "center").strip().lower()
+        if align == "left":
+            return QtCore.Qt.AlignmentFlag.AlignLeft
+        return QtCore.Qt.AlignmentFlag.AlignHCenter
+
+    def _apply_text_align(self) -> None:
+        h = self._caption_h_align()
+        self.notice_label.setAlignment(h)
+        bottom = h | QtCore.Qt.AlignmentFlag.AlignBottom
+        self.translated_label.setAlignment(bottom)
+        self.final_label.setAlignment(bottom)
+        self.partial_label.setAlignment(bottom)
+
+    def _line_slot_height(self) -> int:
+        font_size = int(self.config.get("font_size", 28))
+        return font_size + _CAPTION_LINE_GAP_PX
+
+    def _chrome_height(self) -> int:
+        pad = int(self.config.get("padding", 24))
+        extra = 44 + pad
+        if self.notice_label.isVisible():
+            extra += max(self.notice_label.sizeHint().height(), 18)
+        return extra
+
+    def _default_window_height(self) -> int:
+        return self._chrome_height() + max(
+            _CAPTION_VISIBLE_LINES * self._line_slot_height(), 96
+        )
+
+    def _min_window_height(self) -> int:
+        return max(
+            _MIN_WINDOW_HEIGHT,
+            self._chrome_height() + self._line_slot_height(),
+        )
+
+    def _window_height(self) -> int:
+        saved = self.config.get("window_height")
+        if isinstance(saved, (int, float)):
+            return int(
+                max(
+                    _MIN_WINDOW_HEIGHT,
+                    min(int(saved), _MAX_WINDOW_HEIGHT),
+                )
+            )
+        return self._default_window_height()
+
+    def _caption_viewport_height(self) -> int:
+        if self.height() > 0:
+            available = self.height() - self._chrome_height()
+            return max(available, self._line_slot_height())
+        return max(_CAPTION_VISIBLE_LINES * self._line_slot_height(), 96)
+
+    @staticmethod
+    def _clamp_window_width(width: int) -> int:
+        return max(_MIN_WINDOW_WIDTH, min(width, _MAX_WINDOW_WIDTH))
+
+    def _event_window_pos(
+        self, obj: QtCore.QObject, event: QtGui.QMouseEvent
+    ) -> QtCore.QPoint:
+        pos = event.position().toPoint()
+        if obj is self:
+            return pos
+        if isinstance(obj, QtWidgets.QWidget):
+            return obj.mapTo(self, pos)
+        return pos
+
+    def _hit_test_resize(self, window_pos: QtCore.QPoint) -> ResizeEdge | None:
+        margin = _RESIZE_MARGIN
+        left = window_pos.x() <= margin
+        right = window_pos.x() >= self.width() - margin
+        top = window_pos.y() <= margin
+        bottom = window_pos.y() >= self.height() - margin
+        if not (left or right or top or bottom):
+            return None
+        return (left, right, top, bottom)
+
+    @staticmethod
+    def _cursor_for_edge(edge: ResizeEdge) -> QtCore.Qt.CursorShape:
+        left, right, top, bottom = edge
+        if (left and top) or (right and bottom):
+            return QtCore.Qt.CursorShape.SizeFDiagCursor
+        if (right and top) or (left and bottom):
+            return QtCore.Qt.CursorShape.SizeBDiagCursor
+        if left or right:
+            return QtCore.Qt.CursorShape.SizeHorCursor
+        return QtCore.Qt.CursorShape.SizeVerCursor
+
+    def _update_hover_cursor(self, window_pos: QtCore.QPoint) -> None:
+        if self._resize_edge is not None or self._drag_offset is not None:
+            return
+        edge = self._hit_test_resize(window_pos)
+        cursor = (
+            self._cursor_for_edge(edge)
+            if edge is not None
+            else QtCore.Qt.CursorShape.SizeAllCursor
+        )
+        self.setCursor(cursor)
+        self.panel.setCursor(cursor)
+
+    def _begin_resize(self, edge: ResizeEdge, global_pos: QtCore.QPoint) -> None:
+        self._resize_edge = edge
+        self._resize_start_pos = global_pos
+        self._resize_start_geom = self.geometry()
+        self.setCursor(self._cursor_for_edge(edge))
+        self.panel.setCursor(self._cursor_for_edge(edge))
+
+    def _continue_resize(self, global_pos: QtCore.QPoint) -> None:
+        if (
+            self._resize_edge is None
+            or self._resize_start_pos is None
+            or self._resize_start_geom is None
+        ):
+            return
+        delta = global_pos - self._resize_start_pos
+        geom = QtCore.QRect(self._resize_start_geom)
+        left, right, top, bottom = self._resize_edge
+        min_w = _MIN_WINDOW_WIDTH
+        min_h = self._min_window_height()
+
+        if left:
+            new_left = geom.left() + delta.x()
+            new_width = geom.right() - new_left + 1
+            if new_width >= min_w:
+                geom.setLeft(new_left)
+        if right:
+            new_width = geom.width() + delta.x()
+            if new_width >= min_w:
+                geom.setWidth(new_width)
+        if top:
+            new_top = geom.top() + delta.y()
+            new_height = geom.bottom() - new_top + 1
+            if new_height >= min_h:
+                geom.setTop(new_top)
+        if bottom:
+            new_height = geom.height() + delta.y()
+            if new_height >= min_h:
+                geom.setHeight(new_height)
+
+        geom.setWidth(self._clamp_window_width(geom.width()))
+        geom.setHeight(
+            max(min_h, min(geom.height(), _MAX_WINDOW_HEIGHT)),
+        )
+        self.setGeometry(geom)
+
+    def _set_caption_label(self, label: QtWidgets.QLabel, text: str) -> None:
+        plain = text.strip() if text else ""
+        if not plain:
+            label.setTextFormat(QtCore.Qt.TextFormat.PlainText)
+            label.setText("")
+            return
+        escaped = html.escape(plain).replace("\n", "<br/>")
+        label.setTextFormat(QtCore.Qt.TextFormat.RichText)
+        label.setText(
+            f'<div style="line-height:{_CAPTION_LINE_HEIGHT};">{escaped}</div>'
+        )
+
+    def _apply_caption_geometry(self) -> None:
+        self._caption_scroll.setFixedHeight(self._caption_viewport_height())
+        self._sync_caption_body_size()
+        self._scroll_captions_to_bottom()
+
+    def _sync_caption_body_size(self) -> None:
+        viewport = self._caption_scroll.viewport()
+        width = max(viewport.width(), self.width() - 48, 80)
+        self._caption_body.setFixedWidth(width)
+        total = 0
+        visible = 0
+        for label in (
+            self.translated_label,
+            self.final_label,
+            self.partial_label,
+        ):
+            label.setFixedWidth(width)
+            if label.isHidden() or not label.text():
+                label.setFixedHeight(0)
+                continue
+            height = max(label.heightForWidth(width), label.fontMetrics().height())
+            label.setFixedHeight(height)
+            total += height
+            visible += 1
+        if visible:
+            total += _CAPTION_BLOCK_SPACING * (visible - 1)
+        self._caption_body.resize(width, max(total, 1))
+
+    def _scroll_captions_to_bottom(self) -> None:
+        bar = self._caption_scroll.verticalScrollBar()
+        bar.setValue(bar.maximum())
+
+    def _trim_display(self, text: str) -> str:
+        if len(text) <= _MAX_DISPLAY_CHARS:
+            return text
+        cut = text[-_MAX_DISPLAY_CHARS:]
+        space = cut.find(" ")
+        return cut[space + 1 :].lstrip() if space >= 0 else cut
+
     def _apply_style(self) -> None:
         font_size = int(self.config.get("font_size", 28))
         font_color = str(self.config.get("font_color", "#ffffff"))
@@ -360,6 +600,13 @@ class SubtitleOverlay(QtWidgets.QWidget):
             QFrame#captionPanel {{
                 background: {rgba};
                 border-radius: 12px;
+            }}
+            QScrollArea#captionScroll {{
+                background: transparent;
+                border: none;
+            }}
+            QWidget#captionBody {{
+                background: transparent;
             }}
             QLabel#translatedCaption {{
                 color: {font_color};
@@ -421,14 +668,27 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self.translate_btn.blockSignals(True)
         self.translate_btn.setChecked(bool(config.get("translation_enabled", False)))
         self.translate_btn.blockSignals(False)
-        self.resize(int(config.get("window_width", 900)), self.height())
+        if not self._show_partials():
+            self._partial_text = ""
+        self.resize(
+            self._clamp_window_width(int(config.get("window_width", 900))),
+            self._window_height(),
+        )
+        self._apply_text_align()
         self._apply_style()
         self._sync_translation_ui()
+        self._apply_caption_geometry()
         desired = bool(config.get("always_on_top", True))
         if desired != self._always_on_top:
             self.set_always_on_top(desired)
         else:
             self._ensure_on_top()
+
+    def _show_partials(self) -> bool:
+        return bool(self.config.get("captions_show_partials", True))
+
+    def _allow_rewrite(self) -> bool:
+        return bool(self.config.get("captions_allow_rewrite", True))
 
     def _translation_active(self) -> bool:
         if not bool(self.config.get("translation_enabled", False)):
@@ -445,45 +705,56 @@ class SubtitleOverlay(QtWidgets.QWidget):
             return "live_asr"
         return mode
 
+    def _second_line_display_text(self) -> str:
+        mode = self._second_line_mode()
+        if mode == "live_asr":
+            if not self._show_partials():
+                return self._final_text
+            parts = [part for part in (self._final_text, self._partial_text) if part]
+            return " ".join(parts).strip()
+        if mode == "original":
+            return self._final_text
+        # none: sin traducción sigue mostrando el ASR confirmado; con TX oculta la 2ª línea.
+        if self._translation_active():
+            return ""
+        return self._final_text
+
     def _sync_translation_ui(self) -> None:
         translation_on = self._translation_active()
+        mode = self._second_line_mode()
         self.translated_label.setVisible(translation_on)
         if not translation_on:
             self._translated_text = ""
             self.translated_label.setText("")
-            self.final_label.setVisible(True)
-            self.partial_label.setVisible(True)
+        if translation_on:
+            self.final_label.setVisible(mode != "none")
         else:
-            mode = self._second_line_mode()
-            show_second = mode != "none"
-            self.final_label.setVisible(show_second)
-            # Con traducción nunca usamos partial como tercera línea visual.
-            self.partial_label.setVisible(False)
+            self.final_label.setVisible(True)
+        self.partial_label.setVisible(False)
         self._refresh_caption_texts()
         self._apply_style()
+        needed = max(self.height(), self._default_window_height())
+        if self.height() < needed:
+            self.resize(self.width(), needed)
+        self._apply_caption_geometry()
 
     def _refresh_caption_texts(self) -> None:
         translation_on = self._translation_active()
-        self.translated_label.setText(self._translated_text if translation_on else "")
-        if not translation_on:
-            self.final_label.setText(self._final_text)
-            self.partial_label.setText(self._partial_text)
-            return
-
-        mode = self._second_line_mode()
-        if mode == "live_asr":
-            parts = [part for part in (self._final_text, self._partial_text) if part]
-            self.final_label.setText(" ".join(parts).strip())
-        elif mode == "original":
-            self.final_label.setText(self._final_text)
-        else:
-            self.final_label.setText("")
-        self.partial_label.setText("")
+        second_text = self._second_line_display_text()
+        self._set_caption_label(
+            self.translated_label, self._translated_text if translation_on else ""
+        )
+        self._set_caption_label(self.final_label, second_text)
+        self._set_caption_label(self.partial_label, "")
+        self._sync_caption_body_size()
+        self._scroll_captions_to_bottom()
+        QtCore.QTimer.singleShot(0, self._scroll_captions_to_bottom)
 
     def _on_translate_toggled(self, enabled: bool) -> None:
         self.config["translation_enabled"] = bool(enabled)
         if not enabled:
             self._translated_text = ""
+            self._phrase_translated = ""
             self._caption_seq = 0
         self._sync_translation_ui()
         if self.on_save_config is not None:
@@ -522,21 +793,123 @@ class SubtitleOverlay(QtWidgets.QWidget):
         if self.on_restart_pipeline is not None:
             self.on_restart_pipeline()
 
-    def _apply_translated_text(self, text: str, *, append: bool) -> None:
-        if append and self._translated_text:
+    @staticmethod
+    def _common_word_prefix(left: str, right: str) -> str:
+        words_l = left.split()
+        words_r = right.split()
+        shared: list[str] = []
+        for a, b in zip(words_l, words_r):
+            if a != b:
+                break
+            shared.append(a)
+        return " ".join(shared)
+
+    def _replace_phrase_suffix(
+        self, display: str, old_phrase: str, new_phrase: str
+    ) -> str:
+        if old_phrase and display.endswith(old_phrase):
+            prefix = display[: -len(old_phrase)].rstrip()
+            return f"{prefix} {new_phrase}".strip() if prefix else new_phrase
+        if display:
+            return f"{display} {new_phrase}".strip()
+        return new_phrase
+
+    def _begin_final_phrase(self, text: str) -> None:
+        if self._final_text:
+            self._final_text = f"{self._final_text} {text}".strip()
+        else:
+            self._final_text = text
+        self._phrase_final = text
+        self._pending_new_phrase = False
+        self._final_text = self._trim_display(self._final_text)
+
+    def _begin_translated_phrase(self, text: str) -> None:
+        if self._translated_text:
             self._translated_text = f"{self._translated_text} {text}".strip()
         else:
             self._translated_text = text
+        self._phrase_translated = text
 
-    def _apply_final_text(self, text: str) -> None:
-        """Actualiza el EN confirmado sin acortarlo por una TX de un prefijo."""
+    def _apply_translated_text(self, text: str, *, append: bool) -> None:
         if not text:
             return
-        if not self._final_text:
-            self._final_text = text
-            return
-        if text.startswith(self._final_text) or not self._final_text.startswith(text):
-            self._final_text = text
+        if append and self._phrase_translated:
+            old = self._phrase_translated
+            self._phrase_translated = f"{old} {text}".strip()
+            self._translated_text = self._replace_phrase_suffix(
+                self._translated_text, old, self._phrase_translated
+            )
+        elif append and self._translated_text:
+            self._translated_text = f"{self._translated_text} {text}".strip()
+            self._phrase_translated = (
+                f"{self._phrase_translated} {text}".strip()
+                if self._phrase_translated
+                else text
+            )
+        elif not self._phrase_translated:
+            self._begin_translated_phrase(text)
+        elif text.startswith(self._phrase_translated):
+            self._translated_text = self._replace_phrase_suffix(
+                self._translated_text, self._phrase_translated, text
+            )
+            self._phrase_translated = text
+        elif self._phrase_translated.startswith(text):
+            # Anti-shrink de la frase ES actual.
+            pass
+        elif self._allow_rewrite() and self._common_word_prefix(
+            self._phrase_translated, text
+        ):
+            # Misma enunciación corregida: sustituye solo la frase actual.
+            self._translated_text = self._replace_phrase_suffix(
+                self._translated_text, self._phrase_translated, text
+            )
+            self._phrase_translated = text
+        elif self._allow_rewrite():
+            # Hipótesis nueva sin solape: no borrar scrollback; nueva frase.
+            self._begin_translated_phrase(text)
+        self._translated_text = self._trim_display(self._translated_text)
+
+    def _apply_final_text(self, text: str) -> bool:
+        """Actualiza el EN confirmado. Devuelve True si cambió el buffer."""
+        if not text:
+            return False
+        before = self._final_text
+        if self._pending_new_phrase or not self._phrase_final:
+            self._begin_final_phrase(text)
+            return self._final_text != before
+        if text.startswith(self._phrase_final):
+            self._final_text = self._replace_phrase_suffix(
+                self._final_text, self._phrase_final, text
+            )
+            self._phrase_final = text
+            self._final_text = self._trim_display(self._final_text)
+            return self._final_text != before
+        # Anti-shrink: un prefijo del confirmado no pisa la frase (tampoco con rewrite).
+        if self._phrase_final.startswith(text):
+            return False
+        if not self._allow_rewrite():
+            return False
+        if self._common_word_prefix(self._phrase_final, text):
+            # Corrección de la misma frase (comparten prefijo de palabras).
+            self._final_text = self._replace_phrase_suffix(
+                self._final_text, self._phrase_final, text
+            )
+            self._phrase_final = text
+            self._final_text = self._trim_display(self._final_text)
+            return self._final_text != before
+        # Commit divergente (p. ej. force-commit del streamer): el scrollback
+        # se conserva y el texto nuevo empieza otra frase.
+        self._begin_final_phrase(text)
+        return self._final_text != before
+
+    def _should_apply_translation(self, item_text: str, *, final_changed: bool) -> bool:
+        if self._phrase_final == item_text or final_changed:
+            return True
+        return (
+            self._allow_rewrite()
+            and bool(item_text)
+            and self._phrase_final.startswith(item_text)
+        )
 
     def _show_notice(self, message: str, *, duration_ms: int = 8000) -> None:
         text = message.strip()
@@ -557,6 +930,13 @@ class SubtitleOverlay(QtWidgets.QWidget):
                 item = self.text_queue.get_nowait()
             except queue.Empty:
                 break
+            if item.reset_display:
+                self._partial_text = ""
+                self._phrase_final = ""
+                self._phrase_translated = ""
+                self._pending_new_phrase = True
+                updated = True
+                continue
             if item.notice:
                 self._show_notice(item.notice)
             caption_payload = bool(item.text) or item.translated_text is not None
@@ -564,10 +944,9 @@ class SubtitleOverlay(QtWidgets.QWidget):
                 continue
             if item.is_final:
                 if item.seq < self._caption_seq:
-                    # Traducción tardía del mismo EN que aún se muestra.
                     if (
                         item.translated_text is not None
-                        and item.text == self._final_text
+                        and item.text == self._phrase_final
                     ):
                         self._apply_translated_text(
                             item.translated_text, append=item.translation_append
@@ -576,20 +955,17 @@ class SubtitleOverlay(QtWidgets.QWidget):
                     continue
                 if item.seq > self._caption_seq:
                     self._caption_seq = item.seq
-                    self._apply_final_text(item.text)
-                    self._partial_text = ""
-                    if item.translated_text is not None:
-                        self._apply_translated_text(
-                            item.translated_text, append=item.translation_append
-                        )
-                else:
-                    self._apply_final_text(item.text)
-                    self._partial_text = ""
-                    if item.translated_text is not None:
-                        self._apply_translated_text(
-                            item.translated_text, append=item.translation_append
-                        )
+                final_changed = self._apply_final_text(item.text)
+                self._partial_text = ""
+                if item.translated_text is not None and self._should_apply_translation(
+                    item.text, final_changed=final_changed
+                ):
+                    self._apply_translated_text(
+                        item.translated_text, append=item.translation_append
+                    )
             else:
+                if not self._show_partials():
+                    continue
                 if (
                     item.translated_text is not None
                     and item.seq >= self._caption_seq
@@ -597,8 +973,8 @@ class SubtitleOverlay(QtWidgets.QWidget):
                     self._apply_translated_text(
                         item.translated_text, append=item.translation_append
                     )
-                if self._final_text and item.text.startswith(self._final_text):
-                    self._partial_text = item.text[len(self._final_text) :].strip()
+                if self._phrase_final and item.text.startswith(self._phrase_final):
+                    self._partial_text = item.text[len(self._phrase_final) :].strip()
                 else:
                     self._partial_text = item.text
             updated = True
@@ -608,37 +984,69 @@ class SubtitleOverlay(QtWidgets.QWidget):
     def current_position(self) -> list[int]:
         return [self.x(), self.y()]
 
+    def resizeEvent(self, event: QtGui.QResizeEvent) -> None:
+        super().resizeEvent(event)
+        self._apply_caption_geometry()
+
+    def _handle_mouse_press(self, event: QtGui.QMouseEvent, *, window_pos: QtCore.QPoint) -> bool:
+        if event.button() == QtCore.Qt.MouseButton.RightButton:
+            self._show_context_menu(
+                self.mapFromGlobal(event.globalPosition().toPoint())
+            )
+            return True
+        if event.button() != QtCore.Qt.MouseButton.LeftButton:
+            return False
+        edge = self._hit_test_resize(window_pos)
+        if edge is not None:
+            self._begin_resize(edge, event.globalPosition().toPoint())
+            return True
+        return self._begin_drag(event)
+
+    def _handle_mouse_move(self, event: QtGui.QMouseEvent, *, window_pos: QtCore.QPoint) -> bool:
+        if (
+            self._resize_edge is not None
+            and event.buttons() & QtCore.Qt.MouseButton.LeftButton
+        ):
+            self._continue_resize(event.globalPosition().toPoint())
+            return True
+        if (
+            self._drag_offset is not None
+            and event.buttons() & QtCore.Qt.MouseButton.LeftButton
+        ):
+            self.move(event.globalPosition().toPoint() - self._drag_offset)
+            return True
+        self._update_hover_cursor(window_pos)
+        return False
+
+    def _handle_mouse_release(self) -> None:
+        if self._resize_edge is not None:
+            self._persist_geometry()
+        self._resize_edge = None
+        self._resize_start_pos = None
+        self._resize_start_geom = None
+        self._drag_offset = None
+        self.unsetCursor()
+        self.panel.unsetCursor()
+
     def eventFilter(self, obj: QtCore.QObject, event: QtCore.QEvent) -> bool:
-        if event.type() == QtCore.QEvent.Type.MouseButtonPress and isinstance(
-            event, QtGui.QMouseEvent
-        ):
-            if obj in (self.settings_btn, self.close_btn, self.translate_btn):
-                return False
-            if (
-                obj is self.lang_label
-                and event.button() == QtCore.Qt.MouseButton.LeftButton
-            ):
-                self._show_language_menu()
-                return True
-            if event.button() == QtCore.Qt.MouseButton.RightButton:
-                self._show_context_menu(
-                    self.mapFromGlobal(event.globalPosition().toPoint())
-                )
-                return True
-            if event.button() == QtCore.Qt.MouseButton.LeftButton:
-                if self._begin_drag(event):
+        if isinstance(event, QtGui.QMouseEvent):
+            window_pos = self._event_window_pos(obj, event)
+            if event.type() == QtCore.QEvent.Type.MouseButtonPress:
+                if obj in (self.settings_btn, self.close_btn, self.translate_btn):
+                    return False
+                if (
+                    obj is self.lang_label
+                    and event.button() == QtCore.Qt.MouseButton.LeftButton
+                ):
+                    self._show_language_menu()
                     return True
-        if event.type() == QtCore.QEvent.Type.MouseMove and isinstance(
-            event, QtGui.QMouseEvent
-        ):
-            if (
-                self._drag_offset is not None
-                and event.buttons() & QtCore.Qt.MouseButton.LeftButton
-            ):
-                self.move(event.globalPosition().toPoint() - self._drag_offset)
-                return True
-        if event.type() == QtCore.QEvent.Type.MouseButtonRelease:
-            self._drag_offset = None
+                if self._handle_mouse_press(event, window_pos=window_pos):
+                    return True
+            if event.type() == QtCore.QEvent.Type.MouseMove:
+                if self._handle_mouse_move(event, window_pos=window_pos):
+                    return True
+            if event.type() == QtCore.QEvent.Type.MouseButtonRelease:
+                self._handle_mouse_release()
         return super().eventFilter(obj, event)
 
     def _begin_drag(self, event: QtGui.QMouseEvent) -> bool:
@@ -651,29 +1059,19 @@ class SubtitleOverlay(QtWidgets.QWidget):
         return True
 
     def mousePressEvent(self, event: QtGui.QMouseEvent) -> None:
-        if event.button() == QtCore.Qt.MouseButton.RightButton:
-            self._show_context_menu(event.pos())
-            event.accept()
-            return
-        if event.button() == QtCore.Qt.MouseButton.LeftButton and self._begin_drag(
-            event
-        ):
+        if self._handle_mouse_press(event, window_pos=event.position().toPoint()):
             event.accept()
             return
         super().mousePressEvent(event)
 
     def mouseMoveEvent(self, event: QtGui.QMouseEvent) -> None:
-        if (
-            self._drag_offset is not None
-            and event.buttons() & QtCore.Qt.MouseButton.LeftButton
-        ):
-            self.move(event.globalPosition().toPoint() - self._drag_offset)
+        if self._handle_mouse_move(event, window_pos=event.position().toPoint()):
             event.accept()
             return
         super().mouseMoveEvent(event)
 
     def mouseReleaseEvent(self, event: QtGui.QMouseEvent) -> None:
-        self._drag_offset = None
+        self._handle_mouse_release()
         super().mouseReleaseEvent(event)
 
     def _handle_settings(self) -> None:
