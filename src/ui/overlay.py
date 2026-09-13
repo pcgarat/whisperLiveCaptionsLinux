@@ -223,7 +223,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
 
         width = self._clamp_window_width(int(self.config.get("window_width", 900)))
         self.resize(width, self._window_height())
-        self._restore_position()
+        self._restore_geometry()
         self._apply_caption_geometry()
 
     def _saved_position(self) -> list[int] | None:
@@ -249,10 +249,15 @@ class SubtitleOverlay(QtWidgets.QWidget):
             180, self.height() + 40
         )
 
-    def _restore_position(self) -> None:
-        saved = self._saved_position()
+    def _restore_geometry(self) -> None:
+        """Restaura tamaño + posición guardados (el WM puede resetear al show/flags)."""
+        width = self._clamp_window_width(int(self.config.get("window_width", 900)))
+        height = self._window_height()
         self._ignore_move_save = True
         try:
+            if self.width() != width or self.height() != height:
+                self.resize(width, height)
+            saved = self._saved_position()
             if saved is not None:
                 x, y = self._clamp_to_screens(saved[0], saved[1])
                 self.move(x, y)
@@ -263,6 +268,9 @@ class SubtitleOverlay(QtWidgets.QWidget):
                     self.move(geo.center().x() - self.width() // 2, geo.bottom() - 220)
         finally:
             self._ignore_move_save = False
+
+    def _restore_position(self) -> None:
+        self._restore_geometry()
 
     def _schedule_persist_geometry(self) -> None:
         if self._ignore_move_save or not self.isVisible():
@@ -280,15 +288,15 @@ class SubtitleOverlay(QtWidgets.QWidget):
             self.on_save_config(self.config)
 
     def _reapply_flags(self, *, show_again: bool) -> None:
-        """setWindowFlags recrea la ventana nativa y pierde la posición si no se restaura."""
-        pos = [self.x(), self.y()] if self.isVisible() else self._saved_position()
+        """setWindowFlags recrea la ventana nativa y pierde geometría si no se restaura."""
+        if self.isVisible():
+            self.config["window_pos"] = [self.x(), self.y()]
+            self.config["window_width"] = self.width()
+            self.config["window_height"] = self.height()
         self._ignore_move_save = True
         try:
             self.setWindowFlags(self._window_flags())
-            if pos is not None:
-                x, y = self._clamp_to_screens(int(pos[0]), int(pos[1]))
-                self.move(x, y)
-                self.config["window_pos"] = [x, y]
+            self._restore_geometry()
             if show_again:
                 self.show()
         finally:
@@ -347,9 +355,9 @@ class SubtitleOverlay(QtWidgets.QWidget):
 
     def showEvent(self, event: QtGui.QShowEvent) -> None:
         super().showEvent(event)
-        self._restore_position()
-        QtCore.QTimer.singleShot(0, self._restore_position)
-        QtCore.QTimer.singleShot(50, self._restore_position)
+        self._restore_geometry()
+        QtCore.QTimer.singleShot(0, self._restore_geometry)
+        QtCore.QTimer.singleShot(50, self._restore_geometry)
         QtCore.QTimer.singleShot(0, self._ensure_on_top)
         QtCore.QTimer.singleShot(200, self._ensure_on_top)
 
@@ -733,9 +741,11 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self.partial_label.setVisible(False)
         self._refresh_caption_texts()
         self._apply_style()
-        needed = max(self.height(), self._default_window_height())
-        if self.height() < needed:
-            self.resize(self.width(), needed)
+        # Solo crecer al default si el usuario aún no eligió altura (None).
+        if self.config.get("window_height") is None:
+            needed = max(self.height(), self._default_window_height())
+            if self.height() < needed:
+                self.resize(self.width(), needed)
         self._apply_caption_geometry()
 
     def _refresh_caption_texts(self) -> None:

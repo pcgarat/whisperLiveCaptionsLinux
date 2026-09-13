@@ -10,7 +10,7 @@ from pathlib import Path
 # WindowStaysOnTopHint / _NET_WM_STATE_ABOVE, como el menú de Chrome.
 os.environ.setdefault("QT_QPA_PLATFORM", "xcb")
 
-from PyQt6 import QtWidgets
+from PyQt6 import QtCore, QtWidgets
 
 from src.asr.pipeline import AsrPipeline
 from src.asr.types import CaptionUpdate
@@ -96,6 +96,7 @@ class AppController:
         if self.overlay is not None:
             self.config["window_pos"] = self.overlay.current_position()
             self.config["window_width"] = self.overlay.width()
+            self.config["window_height"] = self.overlay.height()
         if self._tracer is not None and not self._shutting_down:
             self._tracer.note_config(
                 self.config, reason=trace_reason, applied=trace_applied
@@ -134,12 +135,27 @@ class AppController:
 
     def open_settings(self) -> None:
         assert self.overlay is not None
-        dlg = SettingsDialog(self.overlay, self.config)
-        if dlg.exec() != QtWidgets.QDialog.DialogCode.Accepted:
+        # Sin parent: si Settings es hijo del overlay, el WM (xcb) mueve ambos juntos.
+        dlg = SettingsDialog(None, self.config)
+        if bool(self.config.get("always_on_top", True)):
+            dlg.setWindowFlag(QtCore.Qt.WindowType.WindowStaysOnTopHint, True)
+        overlay_geo = self.overlay.frameGeometry()
+        dlg.apply_saved_geometry(fallback_center=overlay_geo.center())
+        accepted = dlg.exec() == QtWidgets.QDialog.DialogCode.Accepted
+        # Tamaño/posición de Settings se guardan aunque se cancele.
+        self.config.update(dlg.geometry_snapshot())
+        self.config = validate_config(self.config)
+        if not accepted:
+            self._save_config(self.config, trace_reason="settings_geometry")
             return
 
         new_cfg = validate_config(dlg.result_config())
+        # Settings trabaja sobre una copia: no pisar geometría viva del overlay.
         new_cfg["window_pos"] = self.overlay.current_position()
+        new_cfg["window_width"] = self.overlay.width()
+        new_cfg["window_height"] = self.overlay.height()
+        # Geometría del diálogo ya viene en result_config; refuerzo por si el WM movió.
+        new_cfg.update(dlg.geometry_snapshot())
         asr_restart_keys = (
             "language",
             "model",
@@ -147,6 +163,8 @@ class AppController:
             "device",
             "compute_type",
             "use_vad",
+        )
+        latency_keys = (
             "latency_mode",
             "latency_profiles",
         )
@@ -166,11 +184,18 @@ class AppController:
         asr_restart = any(
             new_cfg.get(k) != self.config.get(k) for k in asr_restart_keys
         )
+        latency_only = (not asr_restart) and any(
+            new_cfg.get(k) != self.config.get(k) for k in latency_keys
+        )
         translation_only = (not asr_restart) and any(
             new_cfg.get(k) != self.config.get(k) for k in translation_keys
         )
         if asr_restart:
             applied = "asr_restart"
+        elif latency_only and translation_only:
+            applied = "latency_and_translation_hot_swap"
+        elif latency_only:
+            applied = "latency_hot_swap"
         elif translation_only:
             applied = "translation_hot_swap"
         else:
@@ -184,6 +209,8 @@ class AppController:
         if asr_restart:
             self._restart_pipeline_safe()
         else:
+            if latency_only and self.pipeline is not None:
+                self.pipeline.apply_latency_settings(self.config)
             if translation_only:
                 self._hot_swap_translator()
             if self.pipeline is not None:

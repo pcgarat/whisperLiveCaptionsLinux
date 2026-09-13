@@ -177,3 +177,42 @@ def test_settings_conflict_fix_enables_partials_from_sticky(
     assert dlg.captions_show_partials.isChecked() is True
     assert dlg.tx_sticky_mode.currentData() == "partials"
     dlg.close()
+
+
+def test_settings_geometry_snapshot_and_restore(qapp: QtWidgets.QApplication) -> None:
+    from PyQt6 import QtCore
+
+    dlg = SettingsDialog(
+        None,
+        validate_config(
+            {
+                "settings_window_width": 700,
+                "settings_window_height": 800,
+                "settings_window_pos": [120, 80],
+            }
+        ),
+    )
+    dlg.apply_saved_geometry()
+    assert dlg.width() == 700
+    assert dlg.height() == 800
+    assert dlg.x() == 120
+    assert dlg.y() == 80
+    dlg.resize(750, 820)
+    dlg.move(30, 40)
+    snap = dlg.geometry_snapshot()
+    assert snap == {
+        "settings_window_pos": [30, 40],
+        "settings_window_width": 750,
+        "settings_window_height": 820,
+    }
+    cfg = dlg.result_config()
+    assert cfg["settings_window_width"] == 750
+    assert cfg["settings_window_height"] == 820
+    assert cfg["settings_window_pos"] == [30, 40]
+
+    dlg2 = SettingsDialog(None, validate_config({}))
+    dlg2.apply_saved_geometry(fallback_center=QtCore.QPoint(500, 500))
+    assert dlg2.x() == 500 - dlg2.width() // 2
+    assert dlg2.y() == 500 - dlg2.height() // 2
+    dlg.close()
+    dlg2.close()

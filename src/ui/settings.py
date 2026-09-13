@@ -471,13 +471,16 @@ class SettingsDialog(QtWidgets.QDialog):
         self.setModal(True)
         self.setMinimumWidth(520)
         self.setMinimumHeight(640)
-        self.resize(560, 720)
         self.setStyleSheet(_SETTINGS_QSS)
 
         self._config = dict(config)
         if not isinstance(self._config.get("latency_profiles"), dict):
             self._config["latency_profiles"] = deepcopy(LATENCY_FACTORY_PRESETS)
         self._config = validate_config(self._config)
+
+        width = int(self._config.get("settings_window_width", 560))
+        height = int(self._config.get("settings_window_height", 720))
+        self.resize(max(520, width), max(640, height))
 
         root = QtWidgets.QVBoxLayout(self)
         root.setContentsMargins(20, 18, 20, 16)
@@ -529,6 +532,33 @@ class SettingsDialog(QtWidgets.QDialog):
         self._load_translation_decode_into_spins()
         self._sync_translation_preset_actions()
         self._refresh_preview()
+
+    def apply_saved_geometry(
+        self, *, fallback_center: QtCore.QPoint | None = None
+    ) -> None:
+        """Restaura tamaño/posición guardados; si no hay pos, centra en fallback."""
+        width = max(520, int(self._config.get("settings_window_width", 560)))
+        height = max(640, int(self._config.get("settings_window_height", 720)))
+        self.resize(width, height)
+        pos = self._config.get("settings_window_pos")
+        if isinstance(pos, list) and len(pos) == 2:
+            try:
+                self.move(int(pos[0]), int(pos[1]))
+                return
+            except (TypeError, ValueError):
+                pass
+        if fallback_center is not None:
+            self.move(
+                fallback_center.x() - self.width() // 2,
+                fallback_center.y() - self.height() // 2,
+            )
+
+    def geometry_snapshot(self) -> dict[str, Any]:
+        return {
+            "settings_window_pos": [self.x(), self.y()],
+            "settings_window_width": self.width(),
+            "settings_window_height": self.height(),
+        }
 
     def accept(self) -> None:
         if not self._ensure_modes_compatible(changed="save"):
@@ -734,7 +764,7 @@ class SettingsDialog(QtWidgets.QDialog):
 
         note = QtWidgets.QLabel(
             "El chunk lo fija el modo (estable ≈ 0.8 s, baja ≈ 0.35 s). "
-            "Idioma, modelo, audio y latencia se aplican al guardar (reinicia el pipeline)."
+            "Cambios de modo/confianza/techo se aplican al guardar sin reiniciar Whisper."
         )
         note.setObjectName("FieldHint")
         note.setWordWrap(True)
@@ -1266,6 +1296,7 @@ class SettingsDialog(QtWidgets.QDialog):
                 ),
                 "translation_decode_preset": preset,
                 "translation_profiles": deepcopy(self._translation_profiles()),
+                **self.geometry_snapshot(),
             }
         )
         return validate_config(cfg)

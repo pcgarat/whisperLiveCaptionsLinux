@@ -79,6 +79,24 @@ def test_window_height_clamps() -> None:
     assert validate_config({"window_height": 9999})["window_height"] == 1600
 
 
+def test_settings_window_geometry_defaults_and_clamps() -> None:
+    cfg = validate_config({})
+    assert cfg["settings_window_pos"] is None
+    assert cfg["settings_window_width"] == 560
+    assert cfg["settings_window_height"] == 720
+    clamped = validate_config(
+        {
+            "settings_window_width": 100,
+            "settings_window_height": 9999,
+            "settings_window_pos": [10, 20],
+        }
+    )
+    assert clamped["settings_window_width"] == 520
+    assert clamped["settings_window_height"] == 1600
+    assert clamped["settings_window_pos"] == [10, 20]
+    assert validate_config({"settings_window_pos": "bad"})["settings_window_pos"] is None
+
+
 def test_text_align_normalize() -> None:
     assert validate_config({})["text_align"] == "center"
     assert validate_config({"text_align": "left"})["text_align"] == "left"

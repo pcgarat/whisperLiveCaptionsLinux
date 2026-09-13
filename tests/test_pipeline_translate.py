@@ -185,6 +185,34 @@ def test_apply_translation_settings_decode_only_keeps_translator() -> None:
     assert decode == TRANSLATION_FACTORY_PRESETS["quality"]
 
 
+def test_apply_latency_settings_updates_streamer_and_pump() -> None:
+    from src.asr.engine import WhisperEngine
+    from src.audio.capture import AudioRingBuffer, ChunkPump
+
+    cfg = validate_config({"latency_mode": "stable", "language": "en"})
+    pipeline = AsrPipeline(cfg, queue.Queue(), translator=NullTranslator())
+    pipeline._engine = WhisperEngine(language="en", beam_size=5)
+    pipeline._pump = ChunkPump(AudioRingBuffer(), min_chunk_seconds=0.8)
+
+    cfg["latency_mode"] = "low"
+    cfg["latency_profiles"] = {
+        "stable": dict(cfg["latency_profiles"]["stable"]),
+        "low": {
+            "agreement_n": 3,
+            "max_latency_sec": 2.0,
+            "min_chunk_seconds": 0.4,
+        },
+    }
+    cfg = validate_config(cfg)
+    pipeline.apply_latency_settings(cfg)
+
+    assert pipeline._streamer.agreement_n == 3
+    assert abs(pipeline._streamer.max_latency_sec - 2.0) < 1e-9
+    assert abs(pipeline._pump.min_chunk_seconds - 0.4) < 1e-9
+    assert pipeline._engine.beam_size == 1
+    assert pipeline.config["latency_mode"] == "low"
+
+
 def test_emit_committed_translates_delta_and_appends_flag() -> None:
     q: queue.Queue = queue.Queue()
     t = RecordingTranslator()

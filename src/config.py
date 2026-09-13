@@ -76,6 +76,9 @@ DEFAULTS: dict[str, Any] = {
     "window_pos": None,
     "window_width": 900,
     "window_height": None,
+    "settings_window_pos": None,
+    "settings_window_width": 560,
+    "settings_window_height": 720,
 }
 
 CONFIG_NAME = "config.json"
@@ -340,6 +343,18 @@ def _normalize_second_line_mode(raw: dict[str, Any]) -> str:
     return mode
 
 
+def _normalize_window_pos(raw: Any) -> list[int] | None:
+    if raw is None:
+        return None
+    if (
+        not isinstance(raw, (list, tuple))
+        or len(raw) != 2
+        or not all(isinstance(v, (int, float)) for v in raw)
+    ):
+        return None
+    return [int(raw[0]), int(raw[1])]
+
+
 def validate_config(data: dict[str, Any]) -> dict[str, Any]:
     raw = dict(data)
     cfg = deepcopy(DEFAULTS)
@@ -356,6 +371,14 @@ def validate_config(data: dict[str, Any]) -> dict[str, Any]:
         cfg["window_height"] = None
     else:
         cfg["window_height"] = int(_clamp(int(height), 120, 1600))
+    cfg["settings_window_width"] = int(
+        _clamp(int(cfg.get("settings_window_width", 560)), 520, 2000)
+    )
+    settings_h = cfg.get("settings_window_height")
+    if settings_h is None:
+        cfg["settings_window_height"] = int(DEFAULTS["settings_window_height"])
+    else:
+        cfg["settings_window_height"] = int(_clamp(int(settings_h), 640, 1600))
     cfg["buffer_trimming_sec"] = float(
         _clamp(float(cfg["buffer_trimming_sec"]), 5.0, 60.0)
     )
@@ -400,16 +423,8 @@ def validate_config(data: dict[str, Any]) -> dict[str, Any]:
     cfg["max_latency_sec"] = float(profile["max_latency_sec"])
     cfg["min_chunk_seconds"] = float(profile["min_chunk_seconds"])
 
-    pos = cfg.get("window_pos")
-    if pos is not None:
-        if (
-            not isinstance(pos, (list, tuple))
-            or len(pos) != 2
-            or not all(isinstance(v, (int, float)) for v in pos)
-        ):
-            cfg["window_pos"] = None
-        else:
-            cfg["window_pos"] = [int(pos[0]), int(pos[1])]
+    cfg["window_pos"] = _normalize_window_pos(cfg.get("window_pos"))
+    cfg["settings_window_pos"] = _normalize_window_pos(cfg.get("settings_window_pos"))
 
     return cfg
 

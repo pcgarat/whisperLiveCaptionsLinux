@@ -592,9 +592,10 @@ def test_resize_hit_test_detects_edges(qapp: QtWidgets.QApplication) -> None:
 def test_resize_from_right_updates_width(qapp: QtWidgets.QApplication) -> None:
     from PyQt6 import QtCore
 
-    ov, _q = _overlay(qapp)
-    ov.resize(400, 200)
+    ov, _q = _overlay(qapp, cfg={"window_width": 400, "window_height": 200})
     ov.show()
+    qapp.processEvents()
+    assert ov.width() == 400
     start = QtCore.QPoint(400, 100)
     ov._begin_resize((False, True, False, False), start)
     ov._continue_resize(start + QtCore.QPoint(80, 0))
@@ -602,6 +603,41 @@ def test_resize_from_right_updates_width(qapp: QtWidgets.QApplication) -> None:
     ov._handle_mouse_release()
     assert ov.config["window_width"] == 480
     assert ov.config["window_height"] == 200
+    ov.close()
+
+
+def test_restore_geometry_applies_saved_size(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    ov, _q = _overlay(
+        qapp,
+        cfg={
+            "window_width": 640,
+            "window_height": 240,
+            "window_pos": [40, 60],
+        },
+    )
+    ov.resize(900, 120)
+    ov._restore_geometry()
+    assert ov.width() == 640
+    assert ov.height() == 240
+    ov.close()
+
+
+def test_sync_translation_ui_does_not_grow_saved_height(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    ov, _q = _overlay(
+        qapp,
+        cfg={
+            "window_width": 800,
+            "window_height": 140,
+            "translation_enabled": False,
+        },
+    )
+    ov.resize(800, 140)
+    ov._sync_translation_ui()
+    assert ov.height() == 140
     ov.close()
 
 

@@ -58,5 +58,9 @@
   "padding": 24,
   "text_align": "center",
   "window_pos": null,
-  "window_width": 900
+  "window_width": 900,
+  "window_height": null,
+  "settings_window_pos": null,
+  "settings_window_width": 560,
+  "settings_window_height": 720
 }
