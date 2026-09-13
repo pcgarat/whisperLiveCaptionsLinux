@@ -1,6 +1,6 @@
 {
-  "language": "es",
-  "model": "medium",
+  "language": "en",
+  "model": "small",
   "compute_type": "float16",
   "device": "cuda",
   "audio_monitor": "bluez_output.44_73_D6_C9_A1_5F.1.monitor",
@@ -15,7 +15,7 @@
     },
     "low": {
       "agreement_n": 1,
-      "max_latency_sec": 0.35,
+      "max_latency_sec": 1.5,
       "min_chunk_seconds": 0.35
     }
   },
@@ -27,14 +27,14 @@
     "it",
     "pt"
   ],
-  "translation_enabled": false,
+  "translation_enabled": true,
   "translation_target": "es",
-  "translation_sticky_mode": "off",
+  "translation_sticky_mode": "committed",
   "second_line_mode": "none",
   "captions_show_partials": false,
   "captions_allow_rewrite": true,
   "translator_model": "nllb-200-distilled-ct2",
-  "translation_decode_preset": "balanced",
+  "translation_decode_preset": "custom",
   "translation_profiles": {
     "fast": {
       "beam_size": 2,
@@ -61,7 +61,7 @@
   "font_size": 26,
   "font_color": "#ffffff",
   "bg_color": "#000000",
-  "bg_alpha": 0.41,
+  "bg_alpha": 0.6,
   "padding": 20,
   "text_align": "left",
   "window_pos": null,
@@ -70,94 +70,21 @@
   "settings_window_pos": null,
   "settings_window_width": 858,
   "settings_window_height": 992,
-  "app_preset": "Traduccion NLLB-200-Distilled-CT2",
+  "opt_prefer_low_latency": false,
+  "opt_prefer_fast_translation": false,
+  "opt_nllb_on_cpu": false,
+  "opt_tx_delta_only": true,
+  "opt_tx_coalesce_emit": true,
+  "opt_perf_metrics": true,
+  "opt_short_caption_beam_cap": true,
+  "min_chunk_seconds": 0.8,
+  "agreement_n": 1,
+  "max_latency_sec": 0.8,
+  "app_preset": "traducción-independiente",
   "app_presets": {
-    "Traduccion NLLB-200-Distilled-CT2": {
+    "traducción-independiente": {
       "language": "en",
       "model": "small",
-      "compute_type": "float16",
-      "device": "cuda",
-      "audio_monitor": "bluez_output.44_73_D6_C9_A1_5F.1.monitor",
-      "buffer_trimming_sec": 15.0,
-      "use_vad": true,
-      "latency_mode": "stable",
-      "latency_profiles": {
-        "stable": {
-          "agreement_n": 1,
-          "max_latency_sec": 0.5,
-          "min_chunk_seconds": 0.8
-        },
-        "low": {
-          "agreement_n": 1,
-          "max_latency_sec": 0.35,
-          "min_chunk_seconds": 0.35
-        }
-      },
-      "installed_languages": [
-        "en",
-        "es",
-        "fr",
-        "de",
-        "it",
-        "pt"
-      ],
-      "translation_enabled": true,
-      "translation_target": "es",
-      "translation_sticky_mode": "off",
-      "second_line_mode": "none",
-      "captions_show_partials": true,
-      "captions_allow_rewrite": true,
-      "translator_model": "nllb-200-distilled-ct2",
-      "translation_decode_preset": "balanced",
-      "translation_profiles": {
-        "fast": {
-          "beam_size": 2,
-          "length_penalty": 1.0,
-          "no_repeat_ngram_size": 0
-        },
-        "balanced": {
-          "beam_size": 4,
-          "length_penalty": 1.0,
-          "no_repeat_ngram_size": 3
-        },
-        "quality": {
-          "beam_size": 6,
-          "length_penalty": 1.1,
-          "no_repeat_ngram_size": 3
-        },
-        "custom": {
-          "beam_size": 4,
-          "length_penalty": 1.0,
-          "no_repeat_ngram_size": 3
-        }
-      },
-      "always_on_top": true,
-      "font_size": 26,
-      "font_color": "#ffffff",
-      "bg_color": "#000000",
-      "bg_alpha": 0.41,
-      "padding": 20,
-      "text_align": "left",
-      "window_pos": null,
-      "window_width": 900,
-      "window_height": 170,
-      "settings_window_pos": null,
-      "settings_window_width": 762,
-      "settings_window_height": 993,
-      "opt_prefer_low_latency": false,
-      "opt_prefer_fast_translation": false,
-      "opt_nllb_on_cpu": false,
-      "opt_tx_delta_only": true,
-      "opt_tx_coalesce_emit": true,
-      "opt_perf_metrics": true,
-      "opt_short_caption_beam_cap": true,
-      "min_chunk_seconds": 0.8,
-      "agreement_n": 1,
-      "max_latency_sec": 0.5
-    },
-    "Traduccion con Whisper": {
-      "language": "es",
-      "model": "medium",
       "compute_type": "float16",
       "device": "cuda",
       "audio_monitor": "bluez_output.44_73_D6_C9_A1_5F.1.monitor",
@@ -172,7 +99,7 @@
         },
         "low": {
           "agreement_n": 1,
-          "max_latency_sec": 0.35,
+          "max_latency_sec": 1.5,
           "min_chunk_seconds": 0.35
         }
       },
@@ -184,14 +111,14 @@
         "it",
         "pt"
       ],
-      "translation_enabled": false,
+      "translation_enabled": true,
       "translation_target": "es",
-      "translation_sticky_mode": "off",
+      "translation_sticky_mode": "committed",
       "second_line_mode": "none",
       "captions_show_partials": false,
       "captions_allow_rewrite": true,
       "translator_model": "nllb-200-distilled-ct2",
-      "translation_decode_preset": "balanced",
+      "translation_decode_preset": "custom",
       "translation_profiles": {
         "fast": {
           "beam_size": 2,
@@ -218,7 +145,7 @@
       "font_size": 26,
       "font_color": "#ffffff",
       "bg_color": "#000000",
-      "bg_alpha": 0.41,
+      "bg_alpha": 0.6,
       "padding": 20,
       "text_align": "left",
       "window_pos": null,
@@ -226,7 +153,7 @@
       "window_height": 170,
       "settings_window_pos": null,
       "settings_window_width": 858,
-      "settings_window_height": 878,
+      "settings_window_height": 992,
       "opt_prefer_low_latency": false,
       "opt_prefer_fast_translation": false,
       "opt_nllb_on_cpu": false,
@@ -238,15 +165,5 @@
       "agreement_n": 1,
       "max_latency_sec": 0.8
     }
-  },
-  "opt_prefer_low_latency": false,
-  "opt_prefer_fast_translation": false,
-  "opt_nllb_on_cpu": false,
-  "opt_tx_delta_only": true,
-  "opt_tx_coalesce_emit": true,
-  "opt_perf_metrics": true,
-  "opt_short_caption_beam_cap": true,
-  "min_chunk_seconds": 0.8,
-  "agreement_n": 1,
-  "max_latency_sec": 0.8
+  }
 }

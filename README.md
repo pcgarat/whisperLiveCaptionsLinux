@@ -35,11 +35,11 @@ El toggle de traducción hace **hot-swap** del traductor (no recarga Whisper).
 
 En Settings, barra **Preset general** (encima de las pestañas):
 
-- **Guardar como…** crea un snapshot de *toda* la config (captura, latencia, traducción, apariencia, geometría de overlay y Settings).
+- Al instalar hay un preset de fábrica: `traducción-independiente` (EN→ES con NLLB sticky).
+- **Guardar como…** crea más snapshots de *toda* la config (captura, latencia, traducción, apariencia, geometría).
 - **Guardar** sobrescribe el preset activo con el estado actual.
 - **Borrar** elimina el preset (con confirmación); no revierte la config viva.
 - Cambiar el selector **aplica al instante** (reinicia ASR solo si hace falta).
-- Sin presets de fábrica: solo los que guardes tú.
 ### Traducción EN→ES (fase 2.2 + 2.4)
 
 - En el overlay: clic en el código de idioma (`EN`/`ES`/…) para cambiar entre `installed_languages`.

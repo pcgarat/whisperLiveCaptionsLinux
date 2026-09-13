@@ -13,14 +13,18 @@ from src.config import (
 
 
 def test_app_preset_defaults() -> None:
-    from src.config import APP_PRESET_NLLB, APP_PRESET_WHISPER, DEFAULTS
+    from src.config import APP_PRESET_DEFAULT, DEFAULTS
 
     cfg = validate_config({})
-    assert cfg["app_preset"] == DEFAULTS["app_preset"]
-    assert APP_PRESET_WHISPER in cfg["app_presets"]
-    assert APP_PRESET_NLLB in cfg["app_presets"]
-    assert cfg["app_presets"][APP_PRESET_WHISPER]["translation_enabled"] is False
-    assert cfg["app_presets"][APP_PRESET_NLLB]["translation_enabled"] is True
+    assert cfg["app_preset"] == APP_PRESET_DEFAULT
+    assert APP_PRESET_DEFAULT in cfg["app_presets"]
+    assert set(cfg["app_presets"]) == {APP_PRESET_DEFAULT}
+    assert cfg["app_presets"][APP_PRESET_DEFAULT]["translation_enabled"] is True
+    assert cfg["app_presets"][APP_PRESET_DEFAULT]["translation_sticky_mode"] == (
+        "committed"
+    )
+    assert cfg["language"] == DEFAULTS["language"]
+    assert cfg["model"] == DEFAULTS["model"]
 
 
 def test_snapshot_excludes_meta_and_includes_geometry() -> None:

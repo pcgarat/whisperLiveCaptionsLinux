@@ -886,3 +886,140 @@ def test_apply_config_second_line_mode(qapp: QtWidgets.QApplication) -> None:
     ov.apply_config(cfg)
     assert ov.final_label.isHidden()
     ov.close()
+
+
+def test_ensure_on_top_timer_does_not_restack_when_hint_ok(
+    qapp: QtWidgets.QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """El tick periódico no debe raise_/wmctrl si el hint sigue activo."""
+    from PyQt6 import QtCore
+
+    ov, _q = _overlay(qapp, cfg={"always_on_top": True})
+    ov.show()
+    qapp.processEvents()
+    assert bool(ov.windowFlags() & QtCore.Qt.WindowType.WindowStaysOnTopHint)
+
+    calls: list[str] = []
+    monkeypatch.setattr(ov, "raise_", lambda: calls.append("raise"))
+    monkeypatch.setattr(
+        ov, "_apply_x11_above", lambda _enabled: calls.append("wmctrl")
+    )
+    monkeypatch.setattr(
+        ov, "_reapply_flags", lambda **_kw: calls.append("reapply")
+    )
+
+    ov._ensure_on_top()
+    assert calls == []
+
+    ov._ensure_on_top(force_restack=True)
+    assert calls == ["raise", "wmctrl"]
+    ov.close()
+
+
+def test_ensure_on_top_repairs_missing_hint(
+    qapp: QtWidgets.QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from PyQt6 import QtCore
+
+    ov, _q = _overlay(qapp, cfg={"always_on_top": True})
+    ov.show()
+    qapp.processEvents()
+
+    calls: list[str] = []
+
+    def fake_reapply(*, show_again: bool) -> None:
+        del show_again
+        calls.append("reapply")
+
+    flags_without_above = ov.windowFlags() & ~QtCore.Qt.WindowType.WindowStaysOnTopHint
+    monkeypatch.setattr(ov, "_reapply_flags", fake_reapply)
+    monkeypatch.setattr(ov, "raise_", lambda: calls.append("raise"))
+    monkeypatch.setattr(
+        ov, "_apply_x11_above", lambda _enabled: calls.append("wmctrl")
+    )
+    monkeypatch.setattr(ov, "windowFlags", lambda: flags_without_above)
+
+    ov._ensure_on_top()
+    assert calls == ["reapply", "raise", "wmctrl"]
+    ov.close()
+
+
+def test_refresh_skips_identical_caption_text(
+    qapp: QtWidgets.QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ov, q = _overlay(qapp)
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello world",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Hola mundo",
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+
+    calls: list[str] = []
+    real_set = ov.final_label.setText
+
+    def tracked_set(text: str) -> None:
+        calls.append(text)
+        real_set(text)
+
+    monkeypatch.setattr(ov.final_label, "setText", tracked_set)
+    ov._refresh_caption_texts()
+    assert calls == []
+
+    ov._final_text = "Hello there"
+    ov._phrase_final = "Hello there"
+    ov._refresh_caption_texts()
+    assert len(calls) == 1
+    assert "Hello there" in calls[0]
+    ov.close()
+
+
+def test_rewrite_refresh_keeps_updates_batched(
+    qapp: QtWidgets.QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Un rewrite no debe pintar frames intermedios del scroll/labels."""
+    ov, q = _overlay(qapp)
+    now = time.monotonic()
+    q.put(
+        CaptionUpdate(
+            text="Hello world",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Hola mundo",
+            seq=1,
+        )
+    )
+    ov._poll_queue()
+
+    states: list[tuple[bool, bool]] = []
+    real_set_text = ov.final_label.setText
+
+    def tracked_set(text: str) -> None:
+        states.append((ov.updatesEnabled(), ov._caption_scroll.updatesEnabled()))
+        real_set_text(text)
+
+    monkeypatch.setattr(ov.final_label, "setText", tracked_set)
+    q.put(
+        CaptionUpdate(
+            text="Hello there",
+            is_final=True,
+            language="en",
+            ts_mono=now,
+            translated_text="Hola alli",
+            seq=2,
+        )
+    )
+    ov._poll_queue()
+    assert states
+    assert all(not overlay_on and not scroll_on for overlay_on, scroll_on in states)
+    assert ov.updatesEnabled()
+    assert ov._caption_scroll.updatesEnabled()
+    assert ov._final_text == "Hello there"
+    ov.close()
