@@ -34,6 +34,7 @@ El toggle de traducción hace **hot-swap** del traductor (no recarga Whisper).
 ### Traducción EN→ES (fase 2.2)
 
 - En el overlay: clic en el código de idioma (`EN`/`ES`/…) para cambiar entre `installed_languages`.
+- En Settings: selector de idiomas instalados + **Instalar nuevos…** (catálogo fijo: en/es/fr/de/it/pt; sin descarga).
 - Botón **ES** (toggle): activa/desactiva traducción. Persiste en `config.json`.
 - Con traducción ON: línea 1 = español (solo texto ASR **confirmado**); línea 2 = ASR en vivo si **Mostrar línea ASR** está activo en Settings.
 - Con idioma `es` o toggle OFF: no se traduce (passthrough).
@@ -72,6 +73,9 @@ pytest -q
 - [ ] Traducción OFF: una línea ASR como antes
 - [ ] Idioma `es`: sin traducción real
 - [ ] Smoke EN→ES ≥ 15 min sin cuelgue de UI
+
+### Fase 2.3
+- [ ] Settings → Instalar nuevos… añade idiomas al combo y, tras Guardar, al menú del overlay
 
 ## Arquitectura
 

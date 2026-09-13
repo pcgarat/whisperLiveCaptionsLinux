@@ -14,7 +14,7 @@ TRANSLATOR_MODEL_ALIASES: dict[str, str] = {
     NLLB_CT2_MODEL_ID: NLLB_CT2_MODEL_ID,
 }
 
-# Códigos ISO → etiquetas NLLB-200 (fase 2.2: EN→ES; resto para puerta abierta).
+# Códigos ISO → etiquetas NLLB-200. Claves alineadas con AVAILABLE_LANGUAGES.
 NLLB_LANG_CODES: dict[str, str] = {
     "en": "eng_Latn",
     "es": "spa_Latn",

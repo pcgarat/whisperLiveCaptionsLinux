@@ -7,6 +7,7 @@ from typing import Any
 
 from PyQt6 import QtCore, QtGui, QtWidgets
 
+from src.asr.languages import language_label
 from src.asr.types import CaptionUpdate
 
 
@@ -457,7 +458,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
             lang = str(code).strip().lower()
             if not lang:
                 continue
-            action = menu.addAction(lang.upper())
+            action = menu.addAction(language_label(lang))
             action.setCheckable(True)
             action.setChecked(lang == current)
             action.triggered.connect(lambda _checked=False, c=lang: self._set_language(c))
