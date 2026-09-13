@@ -1,11 +1,11 @@
-# Plan: Fase 2.4 — Presets de calidad de traducción
+# Plan: Fase 2.5 — Modos sticky de traducción
 
-Spec: `docs/specs/fase2.4-traduccion-presets-calidad-2026-09-13.md`  
-**Estado:** implementación completa (spec aprobado 2026-09-13). Pendiente smoke manual.
+Spec: `docs/specs/fase2.5-traduccion-sticky-modos-2026-09-13.md`  
+**Estado:** implementación completa. Pendiente smoke manual.
 
 ## Enfoque
 
-1. **Config:** constantes de fábrica, clamp, `effective_translation_decode`, migración, CRUD usuario. ✅
-2. **Motor:** `translate_batch` con knobs; hot-swap decode sin recrear modelo. ✅
-3. **UI:** pestañas General / Traducciones; presets + Guardar/Borrar. ✅
-4. **Docs/tests.** ✅
+1. **Config:** `translation_sticky_mode` + validación + example. ✅
+2. **Pipeline:** checkpoints + plan sticky; jobs parciales; hot-swap/reset. ✅
+3. **Overlay + Settings:** TX en parciales; combo en Traducciones. ✅
+4. **Tests/docs.** ✅

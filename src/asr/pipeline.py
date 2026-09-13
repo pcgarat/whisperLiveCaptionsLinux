@@ -24,8 +24,54 @@ logger = logging.getLogger(__name__)
 @dataclass(frozen=True)
 class _TxJob:
     seq: int
-    committed: str
+    text: str
     language: str
+    is_partial: bool = False
+    gen: int = 0
+
+
+@dataclass(frozen=True)
+class TxCheckpoint:
+    src: str
+    es: str
+
+
+@dataclass(frozen=True)
+class StickyPlan:
+    to_translate: str
+    es_prefix: str | None
+    append: bool
+    emit_es: str | None = None
+
+
+def plan_sticky_translation(
+    checkpoints: list[TxCheckpoint], text: str
+) -> StickyPlan:
+    """Planifica qué traducir reutilizando el checkpoint-prefijo más largo."""
+    best: TxCheckpoint | None = None
+    for cp in checkpoints:
+        if text.startswith(cp.src) and (
+            best is None or len(cp.src) >= len(best.src)
+        ):
+            best = cp
+    if best is not None and best.src == text:
+        return StickyPlan(
+            to_translate="", es_prefix=best.es, append=False, emit_es=best.es
+        )
+    if best is not None:
+        delta = text[len(best.src) :].strip()
+        return StickyPlan(to_translate=delta, es_prefix=best.es, append=False)
+    return StickyPlan(to_translate=text, es_prefix=None, append=False)
+
+
+def plan_off_translation(last_tx_src: str, text: str) -> StickyPlan:
+    if last_tx_src and text.startswith(last_tx_src) and text != last_tx_src:
+        return StickyPlan(
+            to_translate=text[len(last_tx_src) :].strip(),
+            es_prefix=None,
+            append=True,
+        )
+    return StickyPlan(to_translate=text, es_prefix=None, append=False)
 
 
 def translate_confirmed(
@@ -37,7 +83,7 @@ def translate_confirmed(
     translator: Translator,
     decode: dict[str, float | int] | None = None,
 ) -> str | None:
-    """Traduce solo texto confirmado. Devuelve None si no aplica o falla."""
+    """Traduce texto. Devuelve None si no aplica o falla."""
     if not translation_enabled:
         return None
     src = (source_lang or "").strip().lower()
@@ -87,7 +133,9 @@ class AsrPipeline:
         self._tx_pending_cv = threading.Condition(self._tx_pending_lock)
         self._tx_pending: _TxJob | None = None
         self._tx_busy = False
+        self._tx_job_gen = 0
         self._last_tx_committed = ""
+        self._tx_checkpoints: list[TxCheckpoint] = []
 
     def start(self) -> None:
         if self._thread and self._thread.is_alive():
@@ -126,6 +174,7 @@ class AsrPipeline:
         self._last_committed = ""
         with self._tx_pending_lock:
             self._last_tx_committed = ""
+            self._tx_checkpoints = []
             self._tx_pending = None
         self._ensure_tx_worker()
         self._thread = threading.Thread(
@@ -152,6 +201,11 @@ class AsrPipeline:
                 "No se pudo precargar el traductor; se intentará en el primer final"
             )
 
+    def _sticky_mode(self) -> str:
+        with self._tx_lock:
+            mode = str(self.config.get("translation_sticky_mode") or "off").strip().lower()
+        return mode if mode in ("off", "committed", "partials") else "off"
+
     def apply_translation_settings(self, config: dict[str, Any]) -> None:
         """Hot-swap de flags/decode; recrea Translator solo si cambia motor/enable."""
         fingerprint = (
@@ -160,9 +214,13 @@ class AsrPipeline:
             str(config.get("device") or "cuda"),
         )
         with self._tx_lock:
+            prev_sticky = str(
+                self.config.get("translation_sticky_mode") or "off"
+            ).strip().lower()
             for key in (
                 "translation_enabled",
                 "translation_target",
+                "translation_sticky_mode",
                 "translator_model",
                 "device",
                 "language",
@@ -171,12 +229,20 @@ class AsrPipeline:
             ):
                 if key in config:
                     self.config[key] = config[key]
+            new_sticky = str(
+                self.config.get("translation_sticky_mode") or "off"
+            ).strip().lower()
             need_recreate = fingerprint != self._tx_fingerprint
             if need_recreate:
                 self._translator = create_translator(self.config)
                 self._tx_fingerprint = fingerprint
             translator = self._translator
             enabled = bool(self.config.get("translation_enabled", False))
+        if prev_sticky != new_sticky:
+            with self._tx_pending_lock:
+                self._last_tx_committed = ""
+                self._tx_checkpoints = []
+                self._tx_pending = None
         if need_recreate and enabled:
             threading.Thread(
                 target=self._preload_translator_instance,
@@ -215,8 +281,19 @@ class AsrPipeline:
     def _schedule_translation(self, job: _TxJob) -> None:
         self._ensure_tx_worker()
         with self._tx_pending_cv:
-            self._tx_pending = job
+            self._tx_job_gen += 1
+            self._tx_pending = _TxJob(
+                seq=job.seq,
+                text=job.text,
+                language=job.language,
+                is_partial=job.is_partial,
+                gen=self._tx_job_gen,
+            )
             self._tx_pending_cv.notify()
+
+    @staticmethod
+    def _job_is_newer(candidate: _TxJob, current: _TxJob) -> bool:
+        return candidate.gen > current.gen
 
     def flush_translations(self, timeout: float = 2.0) -> None:
         """Espera a que el worker vacíe el pendiente (tests / apagado ordenado)."""
@@ -248,29 +325,72 @@ class AsrPipeline:
                     self._tx_busy = False
                     self._tx_pending_cv.notify_all()
 
+    def _advance_tx_state(
+        self, *, sticky: bool, text: str, full_es: str | None
+    ) -> None:
+        if sticky:
+            kept = [cp for cp in self._tx_checkpoints if text.startswith(cp.src)]
+            if full_es is not None:
+                kept = [cp for cp in kept if cp.src != text]
+                kept.append(TxCheckpoint(text, full_es))
+            self._tx_checkpoints = kept
+            self._last_tx_committed = text
+        else:
+            self._last_tx_committed = text
+
     def _process_tx_job(self, job: _TxJob) -> None:
         while not self._tx_stop.is_set():
+            sticky_mode = self._sticky_mode()
+            sticky = sticky_mode != "off"
             with self._tx_pending_lock:
                 newer = self._tx_pending
-                if newer is not None and newer.seq > job.seq:
-                    # Antes de traducir: saltar a lo último (ahorra decode obsoleto).
+                if newer is not None and self._job_is_newer(newer, job):
                     job = newer
                     self._tx_pending = None
                     continue
-                base = self._last_tx_committed
+                if sticky:
+                    plan = plan_sticky_translation(list(self._tx_checkpoints), job.text)
+                else:
+                    plan = plan_off_translation(self._last_tx_committed, job.text)
 
-            if base and job.committed.startswith(base) and job.committed != base:
-                to_translate = job.committed[len(base) :].strip()
-                append = True
-            else:
-                to_translate = job.committed
-                append = False
+            if plan.emit_es is not None:
+                payload: CaptionUpdate | None = None
+                continue_with: _TxJob | None = None
+                with self._tx_pending_lock:
+                    emit_seq = job.seq
+                    if self._last_committed.startswith(job.text) or job.is_partial:
+                        emit_seq = max(emit_seq, self._caption_seq)
+                    payload = CaptionUpdate(
+                        text=job.text,
+                        is_final=not job.is_partial,
+                        language=job.language,
+                        ts_mono=time.monotonic(),
+                        translated_text=plan.emit_es,
+                        seq=emit_seq,
+                        translation_append=False,
+                    )
+                    self._advance_tx_state(
+                        sticky=True, text=job.text, full_es=plan.emit_es
+                    )
+                    newer = self._tx_pending
+                    if newer is not None and self._job_is_newer(newer, job):
+                        continue_with = newer
+                        self._tx_pending = None
+                if payload is not None:
+                    self.out_queue.put(payload)
+                if continue_with is not None:
+                    job = continue_with
+                    continue
+                return
 
+            to_translate = plan.to_translate
             if not to_translate:
                 with self._tx_pending_lock:
-                    self._last_tx_committed = job.committed
+                    self._advance_tx_state(
+                        sticky=sticky, text=job.text, full_es=plan.es_prefix
+                    )
                     newer = self._tx_pending
-                    if newer is not None and newer.seq > job.seq:
+                    if newer is not None and self._job_is_newer(newer, job):
                         job = newer
                         self._tx_pending = None
                         continue
@@ -288,31 +408,48 @@ class AsrPipeline:
                 decode=decode,
             )
 
-            # Importante: SIEMPRE emitir y avanzar la base aunque haya arrived
-            # un job más nuevo durante el decode. Si descartamos el resultado,
-            # con habla continua + NLLB lento el worker entra en starvation y
-            # la línea ES nunca se actualiza (el ASR sí).
-            payload: CaptionUpdate | None = None
-            continue_with: _TxJob | None = None
+            # Siempre emitir y avanzar la base aunque llegue un job más nuevo
+            # durante el decode (anti-starvation de la línea ES).
+            payload = None
+            continue_with = None
             with self._tx_pending_lock:
                 if translated is not None:
-                    # Si el ASR ya avanzó pero este committed sigue siendo prefijo,
-                    # etiquetar con el seq actual para que el overlay no la tire.
+                    if sticky:
+                        if plan.es_prefix:
+                            full_es = f"{plan.es_prefix} {translated}".strip()
+                        else:
+                            full_es = translated
+                        append = False
+                        out_es = full_es
+                    else:
+                        full_es = None
+                        append = plan.append
+                        out_es = translated
                     emit_seq = job.seq
-                    if self._last_committed.startswith(job.committed):
+                    if (not job.is_partial) and self._last_committed.startswith(
+                        job.text
+                    ):
+                        emit_seq = max(emit_seq, self._caption_seq)
+                    elif job.is_partial:
                         emit_seq = max(emit_seq, self._caption_seq)
                     payload = CaptionUpdate(
-                        text=job.committed,
-                        is_final=True,
+                        text=job.text,
+                        is_final=not job.is_partial,
                         language=job.language,
                         ts_mono=time.monotonic(),
-                        translated_text=translated,
+                        translated_text=out_es,
                         seq=emit_seq,
                         translation_append=append,
                     )
-                self._last_tx_committed = job.committed
+                    self._advance_tx_state(
+                        sticky=sticky, text=job.text, full_es=full_es if sticky else None
+                    )
+                else:
+                    self._advance_tx_state(
+                        sticky=sticky, text=job.text, full_es=None
+                    )
                 newer = self._tx_pending
-                if newer is not None and newer.seq > job.seq:
+                if newer is not None and self._job_is_newer(newer, job):
                     continue_with = newer
                     self._tx_pending = None
 
@@ -323,6 +460,16 @@ class AsrPipeline:
                 job = continue_with
                 continue
             return
+
+    def _maybe_schedule(self, text: str, *, language: str, seq: int, is_partial: bool) -> None:
+        translation_enabled, target_lang, _, _ = self.translation_snapshot()
+        src = language.strip().lower()
+        tgt = (target_lang or "es").strip().lower() or "es"
+        if not translation_enabled or src == tgt or not text.strip():
+            return
+        self._schedule_translation(
+            _TxJob(seq=seq, text=text, language=language, is_partial=is_partial)
+        )
 
     def _emit_committed(self, committed: str, *, language: str, now: float) -> None:
         """Emite confirmado al instante; encola traducción async con coalescing.
@@ -355,14 +502,22 @@ class AsrPipeline:
             )
         )
 
-        translation_enabled, target_lang, _, _ = self.translation_snapshot()
-        src = language.strip().lower()
-        tgt = (target_lang or "es").strip().lower() or "es"
-        if not translation_enabled or src == tgt or not committed.strip():
-            return
+        self._maybe_schedule(committed, language=language, seq=seq, is_partial=False)
 
-        self._schedule_translation(
-            _TxJob(seq=seq, committed=committed, language=language)
+    def _emit_partial(self, display: str, *, language: str, now: float) -> None:
+        self.out_queue.put(
+            CaptionUpdate(
+                text=display,
+                is_final=False,
+                language=language,
+                ts_mono=now,
+                seq=self._caption_seq,
+            )
+        )
+        if self._sticky_mode() != "partials":
+            return
+        self._maybe_schedule(
+            display, language=language, seq=self._caption_seq, is_partial=True
         )
 
     def stop(self, timeout: float = 3.0) -> None:
@@ -414,14 +569,7 @@ class AsrPipeline:
                 self._emit_committed(result.committed, language=language, now=now)
             if result.partial:
                 display = (result.committed + " " + result.partial).strip()
-                self.out_queue.put(
-                    CaptionUpdate(
-                        text=display,
-                        is_final=False,
-                        language=language,
-                        ts_mono=now,
-                    )
-                )
+                self._emit_partial(display, language=language, now=now)
 
             if self._capture.buffer.duration_seconds() > trim_sec and result.committed:
                 # Conserva cola del buffer para no crecer sin límite en sesiones largas.
@@ -436,4 +584,5 @@ class AsrPipeline:
                     self._last_committed = ""
                     with self._tx_pending_lock:
                         self._last_tx_committed = ""
+                        self._tx_checkpoints = []
                         self._tx_pending = None

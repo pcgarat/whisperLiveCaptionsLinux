@@ -22,6 +22,7 @@
   "installed_languages": ["en", "es"],
   "translation_enabled": false,
   "translation_target": "es",
+  "translation_sticky_mode": "off",
   "second_line_mode": "live_asr",
   "translator_model": "nllb-200-distilled-ct2",
   "translation_decode_preset": "balanced",

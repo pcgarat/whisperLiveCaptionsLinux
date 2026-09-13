@@ -35,7 +35,7 @@ class CaptionUpdate:
 ## Streaming
 
 - Política en `src/asr/streaming.py` (LocalAgreement propia).
-- Traducción: protocol `Translator` en `src/asr/translate.py` (Null / NLLB CT2); solo sobre confirmados; worker async con coalescing (`tx-worker`).
+- Traducción: protocol `Translator` en `src/asr/translate.py` (Null / NLLB CT2); por defecto solo confirmados; modos sticky (`off`/`committed`/`partials`) en config; worker async con coalescing (`tx-worker`).
 - `latency_mode` en config (`stable` | `low`).
 
 ## Errores

@@ -29,6 +29,7 @@ def test_load_missing_returns_defaults(tmp_path: Path) -> None:
     assert cfg["latency_profiles"]["low"] == LATENCY_FACTORY_PRESETS["low"]
     assert cfg["translation_enabled"] is False
     assert cfg["translation_target"] == "es"
+    assert cfg["translation_sticky_mode"] == "off"
     assert cfg["second_line_mode"] == "live_asr"
     assert cfg["installed_languages"] == ["en", "es"]
     assert cfg["translator_model"] == "nllb-200-distilled-ct2"
@@ -117,6 +118,7 @@ def test_save_and_load_roundtrip_preserves_translation_flags(tmp_path: Path) -> 
             "language": "en",
             "translation_enabled": True,
             "translation_target": "es",
+            "translation_sticky_mode": "partials",
             "second_line_mode": "none",
             "installed_languages": ["en", "es", "fr"],
             "translator_model": "nllb-200-distilled-ct2",
@@ -126,6 +128,7 @@ def test_save_and_load_roundtrip_preserves_translation_flags(tmp_path: Path) -> 
     loaded = load_config(path)
     assert loaded["translation_enabled"] is True
     assert loaded["translation_target"] == "es"
+    assert loaded["translation_sticky_mode"] == "partials"
     assert loaded["second_line_mode"] == "none"
     assert loaded["installed_languages"] == ["en", "es", "fr"]
     assert loaded["translator_model"] == "nllb-200-distilled-ct2"
@@ -140,6 +143,19 @@ def test_migrate_legacy_show_asr_line_to_second_line_mode() -> None:
     assert (
         validate_config({"second_line_mode": "nope"})["second_line_mode"] == "live_asr"
     )
+
+
+def test_translation_sticky_mode_defaults_and_clamp() -> None:
+    assert validate_config({})["translation_sticky_mode"] == "off"
+    assert validate_config({"translation_sticky_mode": "committed"})[
+        "translation_sticky_mode"
+    ] == "committed"
+    assert validate_config({"translation_sticky_mode": "PARTIALS"})[
+        "translation_sticky_mode"
+    ] == "partials"
+    assert validate_config({"translation_sticky_mode": "nope"})[
+        "translation_sticky_mode"
+    ] == "off"
 
 
 def test_installed_languages_includes_active_language() -> None:

@@ -34,7 +34,7 @@ El toggle de traducción hace **hot-swap** del traductor (no recarga Whisper).
 ### Traducción EN→ES (fase 2.2 + 2.4)
 
 - En el overlay: clic en el código de idioma (`EN`/`ES`/…) para cambiar entre `installed_languages`.
-- En Settings → pestaña **Traducciones**: segunda línea + presets de calidad de decoding (`Rápido` / `Equilibrado` / `Calidad` / `Custom` + presets propios).
+- En Settings → pestaña **Traducciones**: segunda línea, modo sticky (normal / solo confirmados / +parciales) y presets de calidad de decoding (`Rápido` / `Equilibrado` / `Calidad` / `Custom` + presets propios).
 - Botón **ES** (toggle): activa/desactiva traducción. Persiste en `config.json`.
 - Con traducción ON: línea 1 = español (solo texto ASR **confirmado**); línea 2 según **Segunda línea**: ASR en vivo, idioma original, o nada.
 - Con idioma `es` o toggle OFF: no se traduce (passthrough).
