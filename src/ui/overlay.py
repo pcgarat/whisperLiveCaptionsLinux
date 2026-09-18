@@ -11,9 +11,11 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from src.asr.languages import AVAILABLE_LANGUAGES, language_label
 from src.asr.types import CaptionUpdate
+from src.config import list_app_preset_ids
 from src.debug.live_metrics import PERF, format_perf_chip
 from src.debug.trace import debug_hud_enabled, debug_trace_enabled
 from src.debug.vram import query_vram
+from src.presets import app_preset_label
 from src.ui.fonts import font_family_qss, font_weight_css
 
 # Cola visible del overlay: suficiente para scrollear, sin crecer sin límite.
@@ -45,6 +47,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
         on_save_config: Callable[[dict[str, Any]], None] | None = None,
         on_restart_pipeline: Callable[[], None] | None = None,
         on_translation_changed: Callable[[], None] | None = None,
+        on_apply_app_preset: Callable[[str | None], str | None] | None = None,
     ) -> None:
         super().__init__()
         self.text_queue = text_queue
@@ -54,6 +57,8 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self.on_save_config = on_save_config
         self.on_restart_pipeline = on_restart_pipeline
         self.on_translation_changed = on_translation_changed
+        self.on_apply_app_preset = on_apply_app_preset
+        self._loading_preset_selector = False
         self._final_text = ""
         self._partial_text = ""
         self._translated_text = ""
@@ -144,6 +149,17 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self.translate_btn.setToolTip("Traducir a español (solo texto confirmado)")
         self.translate_btn.toggled.connect(self._on_translate_toggled)
         top.addWidget(self.translate_btn)
+
+        self.preset_selector = QtWidgets.QComboBox()
+        self.preset_selector.setObjectName("presetSelector")
+        self.preset_selector.setCursor(QtCore.Qt.CursorShape.PointingHandCursor)
+        self.preset_selector.setToolTip("Preset general: se aplica al elegirlo")
+        self.preset_selector.setSizeAdjustPolicy(
+            QtWidgets.QComboBox.SizeAdjustPolicy.AdjustToContents
+        )
+        self._refresh_preset_selector()
+        self.preset_selector.currentIndexChanged.connect(self._on_preset_selected)
+        top.addWidget(self.preset_selector)
         top.addStretch(1)
 
         self.settings_btn = QtWidgets.QPushButton("⚙")
@@ -775,6 +791,25 @@ class SubtitleOverlay(QtWidgets.QWidget):
                 border-color: {font_color};
                 background: rgba(255, 255, 255, 0.12);
             }}
+            QComboBox#presetSelector {{
+                background: transparent;
+                color: {partial_rgba};
+                border: 1px solid {partial_rgba};
+                border-radius: 4px;
+                font-size: 12px;
+                font-weight: 600;
+                padding: 2px 18px 2px 6px;
+            }}
+            QComboBox#presetSelector::drop-down {{
+                border: none;
+                width: 16px;
+            }}
+            QComboBox#presetSelector QAbstractItemView {{
+                background: #2b2b2b;
+                color: #f0f0f0;
+                selection-background-color: #3584e4;
+                border: 1px solid #555;
+            }}
             QPushButton {{
                 background: transparent;
                 color: {font_color};
@@ -797,6 +832,7 @@ class SubtitleOverlay(QtWidgets.QWidget):
         self.translate_btn.blockSignals(True)
         self.translate_btn.setChecked(bool(config.get("translation_enabled", False)))
         self.translate_btn.blockSignals(False)
+        self._refresh_preset_selector()
         if not self._show_partials():
             self._partial_text = ""
         self.resize(
@@ -920,6 +956,27 @@ class SubtitleOverlay(QtWidgets.QWidget):
                 lambda _checked=False, c=lang: self._set_language(c)
             )
         menu.exec(self.lang_label.mapToGlobal(self.lang_label.rect().bottomLeft()))
+
+    def _refresh_preset_selector(self) -> None:
+        self._loading_preset_selector = True
+        try:
+            current = self.config.get("app_preset")
+            self.preset_selector.clear()
+            self.preset_selector.addItem("(ninguno)", None)
+            for preset_id in list_app_preset_ids(self.config):
+                self.preset_selector.addItem(app_preset_label(preset_id), preset_id)
+            idx = self.preset_selector.findData(current) if current else -1
+            self.preset_selector.setCurrentIndex(idx if idx >= 0 else 0)
+        finally:
+            self._loading_preset_selector = False
+
+    def _on_preset_selected(self, _index: int = 0) -> None:
+        if self._loading_preset_selector or self.on_apply_app_preset is None:
+            return
+        preset_id = self.preset_selector.currentData()
+        warning = self.on_apply_app_preset(preset_id)
+        if warning:
+            self._show_notice(warning)
 
     def _set_language(self, language: str) -> None:
         lang = language.strip().lower() or "en"
@@ -1178,7 +1235,12 @@ class SubtitleOverlay(QtWidgets.QWidget):
         if isinstance(event, QtGui.QMouseEvent):
             window_pos = self._event_window_pos(obj, event)
             if event.type() == QtCore.QEvent.Type.MouseButtonPress:
-                if obj in (self.settings_btn, self.close_btn, self.translate_btn):
+                if obj in (
+                    self.settings_btn,
+                    self.close_btn,
+                    self.translate_btn,
+                    self.preset_selector,
+                ):
                     return False
                 if (
                     obj is self.lang_label

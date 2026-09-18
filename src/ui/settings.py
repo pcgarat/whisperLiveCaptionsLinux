@@ -40,7 +40,7 @@ from src.config import (
     translation_user_preset_ids,
     validate_config,
 )
-from src.presets import is_factory_preset
+from src.presets import app_preset_label, is_factory_preset
 from src.ui.branding import load_brand_logo_pixmap, repo_or_app_root
 from src.ui.fonts import (
     available_caption_fonts,
@@ -1081,7 +1081,7 @@ class SettingsDialog(QtWidgets.QDialog):
             self.app_preset.clear()
             self.app_preset.addItem("(ninguno)", None)
             for preset_id in list_app_preset_ids(self._config):
-                self.app_preset.addItem(preset_id, preset_id)
+                self.app_preset.addItem(app_preset_label(preset_id), preset_id)
             if isinstance(current, str) and current:
                 idx = self.app_preset.findData(current)
                 self.app_preset.setCurrentIndex(idx if idx >= 0 else 0)
