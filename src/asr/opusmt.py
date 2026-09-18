@@ -64,6 +64,19 @@ ITC_ES = OpusMtModel(
     zip_path="itc-itc/opusTCv20210807_transformer-big_2022-08-10.zip",
     target_token=">>spa<<",
 )
+# Eslavo oriental (be/rue/ru/uk→es): mejor BLEU en ruso (52,1) que el modelo
+# eslavo general de abajo (50,6), y no hay bilingüe tc-big rus-spa.
+ZLE_ES = OpusMtModel(
+    name="tc-big-zle-es",
+    zip_path="zle-spa/opusTCv20210807_transformer-big_2022-06-24.zip",
+)
+# No existe bilingüe tc-big ni familia eslava occidental (zlw) hacia español; el
+# único tc-big que cubre checo y polaco es el eslavo general, que también sirve
+# ruso pero con algo menos de BLEU que ZLE_ES.
+SLA_ES = OpusMtModel(
+    name="tc-big-sla-es",
+    zip_path="sla-spa/opusTCv20210807_transformer-big_2022-09-15.zip",
+)
 
 # Registro declarativo: añadir un idioma es añadir una fila. fr/it/pt comparten
 # directorio, así que la caché se indexa por nombre de modelo y no por idioma.
@@ -73,6 +86,9 @@ OPUS_MT_REGISTRY: dict[str, OpusMtModel] = {
     "fr": ITC_ES,
     "it": ITC_ES,
     "pt": ITC_ES,
+    "ru": ZLE_ES,
+    "cs": SLA_ES,
+    "pl": SLA_ES,
 }
 
 REQUIRED_FILES = ("model.bin", "config.json", "source.spm", "target.spm")
@@ -148,9 +164,9 @@ def convert_model(model: OpusMtModel, *, quantization: str = "int8") -> Path:
 class MarianCt2Translator:
     """Opus-MT en CT2, con un modelo por idioma de origen y carga diferida.
 
-    Mantiene cargados los modelos que se hayan usado (a ~300 MB cada uno los tres
-    del catálogo caben de sobra junto a Whisper), indexados por nombre de modelo
-    para que fr/it/pt compartan una sola copia de `tc-big-itc-itc`.
+    Mantiene cargados los modelos que se hayan usado (a ~200-300 MB cada uno caben
+    de sobra junto a Whisper), indexados por nombre de modelo para que los idiomas
+    de una misma familia (fr/it/pt, cs/pl) compartan una sola copia cargada.
     """
 
     _CPU_FALLBACK_NOTICE = "Traducción en CPU (CUDA no disponible). Puede ir más lenta."

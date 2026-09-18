@@ -181,7 +181,7 @@ def test_prefetch_derives_models_from_factory_presets() -> None:
     import importlib.util
     from pathlib import Path
 
-    from src.asr.opusmt import DE_ES, EN_ES, ITC_ES
+    from src.asr.opusmt import DE_ES, EN_ES, ITC_ES, SLA_ES, ZLE_ES
 
     script = Path(__file__).resolve().parent.parent / "scripts" / "prefetch-models.py"
     spec = importlib.util.spec_from_file_location("prefetch_models", script)
@@ -193,5 +193,6 @@ def test_prefetch_derives_models_from_factory_presets() -> None:
     assert whisper == ["large-v3-turbo"]
     # Ningún preset de fábrica usa NLLB: no hay que bajar 1,4 GB para nada.
     assert nllb == []
-    # Cinco idiomas, tres modelos: fr/it/pt comparten `tc-big-itc-itc`.
-    assert set(opus) == {EN_ES, DE_ES, ITC_ES}
+    # Ocho idiomas, cinco modelos: fr/it/pt comparten `tc-big-itc-itc` y cs/pl
+    # comparten `tc-big-sla-es`.
+    assert set(opus) == {EN_ES, DE_ES, ITC_ES, ZLE_ES, SLA_ES}

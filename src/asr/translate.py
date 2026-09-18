@@ -61,6 +61,9 @@ NLLB_LANG_CODES: dict[str, str] = {
     "de": "deu_Latn",
     "it": "ita_Latn",
     "pt": "por_Latn",
+    "ru": "rus_Cyrl",
+    "cs": "ces_Latn",
+    "pl": "pol_Latn",
 }
 
 

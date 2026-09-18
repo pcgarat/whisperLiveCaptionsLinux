@@ -11,6 +11,9 @@ AVAILABLE_LANGUAGES: dict[str, str] = {
     "de": "Alemán",
     "it": "Italiano",
     "pt": "Portugués",
+    "ru": "Ruso",
+    "cs": "Checo",
+    "pl": "Polaco",
 }
 
 
