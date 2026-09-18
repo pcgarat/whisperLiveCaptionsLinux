@@ -11,6 +11,8 @@ from src.asr.opusmt import (
     ITC_ES,
     OPUS_MT_REGISTRY,
     REQUIRED_FILES,
+    SLA_ES,
+    ZLE_ES,
     MarianCt2Translator,
     convert_model,
     is_model_ready,
@@ -68,18 +70,28 @@ def test_registry_shares_one_model_for_romance_languages() -> None:
     # fr/it/pt salen del mismo directorio: no hay bilingüe tc-big hacia español.
     assert OPUS_MT_REGISTRY["fr"] is OPUS_MT_REGISTRY["it"] is OPUS_MT_REGISTRY["pt"]
     assert OPUS_MT_REGISTRY["fr"] is ITC_ES
-    # Solo el multilingüe lleva token de destino; metérselo a un bilingüe degrada.
+    # Solo el multilingüe con varios destinos lleva token; metérselo a un
+    # bilingüe (o a un modelo con destino único) degrada la traducción.
     assert ITC_ES.target_token == ">>spa<<"
     assert EN_ES.target_token is None and DE_ES.target_token is None
     assert "es" not in OPUS_MT_REGISTRY
 
 
+def test_registry_shares_one_model_for_slavic_languages() -> None:
+    assert OPUS_MT_REGISTRY["ru"] is ZLE_ES
+    # cs/pl salen del mismo directorio: no hay bilingüe ni familia zlw tc-big.
+    assert OPUS_MT_REGISTRY["cs"] is OPUS_MT_REGISTRY["pl"] is SLA_ES
+    # zle-spa y sla-spa solo traducen a español (destino único): sin token.
+    assert ZLE_ES.target_token is None and SLA_ES.target_token is None
+
+
 def test_required_models_dedupes() -> None:
     assert required_models(["fr", "it", "pt"]) == [ITC_ES]
     assert required_models(["en", "fr", "de", "it", "pt"]) == [EN_ES, ITC_ES, DE_ES]
+    assert required_models(["cs", "pl"]) == [SLA_ES]
     # Idiomas sin modelo (o vacíos) no rompen ni cuelan entradas.
     assert required_models(["es", "", "ja"]) == []
-    assert required_models() == [EN_ES, DE_ES, ITC_ES]
+    assert required_models() == [EN_ES, DE_ES, ITC_ES, ZLE_ES, SLA_ES]
 
 
 def test_models_dir_honours_env(monkeypatch: Any, tmp_path: Path) -> None:
@@ -124,7 +136,7 @@ def test_convert_is_noop_when_already_present(monkeypatch: Any, tmp_path: Path) 
 
 def test_zip_urls_point_at_the_2022_models() -> None:
     """Los `*-bible-big-*` de 2024 arrastran artefactos de subtítulos: no usarlos."""
-    for model in (EN_ES, DE_ES, ITC_ES):
+    for model in (EN_ES, DE_ES, ITC_ES, ZLE_ES, SLA_ES):
         assert model.url.startswith("https://object.pouta.csc.fi/Tatoeba-MT-models/")
         assert "opusTCv20210807" in model.url
         assert "bible" not in model.url
@@ -212,6 +224,15 @@ def test_multilingual_model_gets_target_token() -> None:
     assert backend.sources[0][0] == ">>spa<<"
 
 
+def test_slavic_family_model_gets_no_target_token() -> None:
+    """zle-es/sla-es solo traducen a español: destino único, sin token."""
+    backend = _Backend()
+    t = _wired("pl", backend)
+    t.translate("nie wiem", "pl", "es")
+    assert backend.sources is not None
+    assert backend.sources[0][0] != ">>spa<<"
+
+
 def test_decode_params_and_subtitle_defaults() -> None:
     backend = _Backend()
     t = _wired("en", backend)
@@ -265,6 +286,28 @@ def test_shared_model_is_loaded_once(monkeypatch: Any, tmp_path: Path) -> None:
     t._ensure(OPUS_MT_REGISTRY["fr"])
     t._ensure(OPUS_MT_REGISTRY["it"])
     t._ensure(OPUS_MT_REGISTRY["pt"])
+    assert len(loads) == 1
+    assert len(t._loaded) == 1
+
+
+def test_slavic_shared_model_is_loaded_once(monkeypatch: Any, tmp_path: Path) -> None:
+    """cs/pl comparten `tc-big-sla-es`: la caché va por modelo, no por idioma."""
+    monkeypatch.setenv("WLCL_MODELS_DIR", str(tmp_path))
+    loads: list[str] = []
+
+    class _Ct2Translator:
+        def __init__(self, path: str, device: str, compute_type: str) -> None:
+            loads.append(path)
+
+    monkeypatch.setattr("src.asr.opusmt.convert_model", lambda m: model_dir(m))
+    monkeypatch.setattr("ctranslate2.Translator", _Ct2Translator)
+    monkeypatch.setattr(
+        "sentencepiece.SentencePieceProcessor", lambda model_file: _Spm()
+    )
+
+    t = MarianCt2Translator(source_lang="cs", device="cpu")
+    t._ensure(OPUS_MT_REGISTRY["cs"])
+    t._ensure(OPUS_MT_REGISTRY["pl"])
     assert len(loads) == 1
     assert len(t._loaded) == 1
 

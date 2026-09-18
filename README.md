@@ -39,9 +39,10 @@ make uninstall-user PURGE_CONFIG=1  # también borra la config XDG
 `make run` en el clon del repo sigue usando el `config.json` del directorio de trabajo (modo desarrollo).
 
 La instalación **descarga los modelos de los presets de fábrica** para que el primer
-arranque no se quede bajando pesos: Whisper `large-v3-turbo` (1,6 GB) y los tres
-traductores Opus-MT. Estos últimos se bajan como ZIP de Marian (2,5 GB) y se convierten
-a CT2 int8 en el sitio, lo que tarda ~90 s y deja solo 685 MB en disco.
+arranque no se quede bajando pesos: Whisper `large-v3-turbo` (1,6 GB) y los cinco
+traductores Opus-MT (`tc-big-en-es`, `tc-big-de-es`, `tc-big-itc-itc`, `tc-big-zle-es`,
+`tc-big-sla-es`). Estos últimos se bajan como ZIP de Marian (~4,2 GB en total) y se
+convierten a CT2 int8 en el sitio, lo que deja ~1,1 GB en disco.
 
 ```bash
 make prefetch-models                       # descargar/convertir a mano
@@ -78,6 +79,9 @@ Para subtitular vídeo de internet hay un preset por idioma, todos con salida en
 | `video-de-es` | alemán | → español |
 | `video-it-es` | italiano | → español |
 | `video-pt-es` | portugués | → español |
+| `video-ru-es` | ruso | → español |
+| `video-cs-es` | checo | → español |
+| `video-pl-es` | polaco | → español |
 | `video-es` | español | no (solo transcribe) |
 
 Elige el del idioma del vídeo en Settings → **Preset general** y listo. Estos presets
@@ -89,12 +93,12 @@ las mediciones en RTX 4060):
 
 - Reconocimiento: `large-v3-turbo` en `int8_float16` → 992 MB de VRAM, mismo acierto que
   `medium` con la mitad de memoria y menos latencia.
-- Traducción: **Opus-MT tc-big** (CT2 int8), un modelo dedicado por idioma → ~300 MB de
-  VRAM y 8 ms por frase. Elegido sobre NLLB-200 porque NLLB inventa texto en los
-  fragmentos cortos (`sì` → «¿Qué?», `yeah` → «- ¿Qué?»), que son la mayoría de un
-  subtítulo, y además puntúa por debajo en FLORES-200 en los cinco pares.
-- Total ~1,3 GB de VRAM, que deja de sobra en una GPU de 8 GB con el navegador
-  reproduciendo. Los tres traductores caben cargados a la vez.
+- Traducción: **Opus-MT tc-big** (CT2 int8), ~200-300 MB de VRAM por modelo cargado y
+  8 ms por frase. Elegido sobre NLLB-200 porque NLLB inventa texto en los fragmentos
+  cortos (`sì` → «¿Qué?», `yeah` → «- ¿Qué?»), que son la mayoría de un subtítulo, y
+  además puntúa por debajo en FLORES-200 en los pares medidos (en/fr/de/it/pt).
+- En/de/fr/it/pt están medidos en RTX 4060 (ver spec de fase 2.9). Ru/cs/pl usan el
+  mismo motor y catálogo Opus-MT pero sin medición propia en esta máquina.
 
 Si quisieras un idioma sin modelo Opus-MT, en Settings → Traducciones → **Motor** tienes
 NLLB-200 (200 idiomas). En General puedes cambiar **Precisión GPU**.
@@ -125,9 +129,12 @@ En Settings, barra **Preset general** (encima de las pestañas):
 - Con idioma `es` o toggle OFF: no se traduce (passthrough).
 - Cambiar preset/knobs de decoding y Guardar hace **hot-swap** (no reinicia Whisper).
 - Motores disponibles (Settings → Traducciones → **Motor**):
-  - `opus-mt-tc-big` (por defecto): un modelo Marian dedicado por idioma de origen.
-    `tc-big-en-es` (234 MB), `tc-big-de-es` (236 MB) y `tc-big-itc-itc` (215 MB, cubre
-    fr/it/pt con el token `>>spa<<`). ~300 MB de VRAM, 8 ms por frase, CC-BY-4.0.
+  - `opus-mt-tc-big` (por defecto): un modelo Marian por idioma de origen (o familia
+    de idiomas cuando no hay bilingüe). `tc-big-en-es` (234 MB), `tc-big-de-es`
+    (236 MB), `tc-big-itc-itc` (215 MB, cubre fr/it/pt con el token `>>spa<<`),
+    `tc-big-zle-es` (cubre ru, sin token: destino único) y `tc-big-sla-es` (cubre
+    cs/pl, sin token). ~200-300 MB de VRAM por modelo cargado, 8 ms por frase,
+    CC-BY-4.0.
   - `nllb-200-distilled-ct2` → `JustFrederik/nllb-200-distilled-600M-ct2-int8` (~647 MB).
   - `nllb-200-distilled-1.3b-ct2` → `OpenNMT/nllb-200-distilled-1.3B-ct2-int8` (~1,4 GB).
   - También acepta un repo CT2 propio escrito tal cual en `translator_model`.
