@@ -11,7 +11,9 @@ from src.asr.engine import WhisperEngine
 from src.asr.streaming import LocalAgreementStreamer
 from src.asr.translate import Translator, create_translator, translator_fingerprint
 from src.asr.types import CaptionUpdate
-from src.audio.capture import AudioRingBuffer, ChunkPump, SystemAudioCapture
+from src.audio.backends import AudioStream
+from src.audio.capture import AudioRingBuffer, ChunkPump
+from src.audio.devices import resolve_backend
 from src.config import (
     beam_size_for_mode,
     effective_latency_profile,
@@ -113,7 +115,7 @@ class AsrPipeline:
         self._tracer = tracer
         self._stop = threading.Event()
         self._thread: threading.Thread | None = None
-        self._capture: SystemAudioCapture | None = None
+        self._capture: AudioStream | None = None
         self._engine: WhisperEngine | None = None
         self._pump: ChunkPump | None = None
         self._tx_lock = threading.Lock()
@@ -154,7 +156,7 @@ class AsrPipeline:
         buffer = AudioRingBuffer(
             max_seconds=float(self.config.get("buffer_trimming_sec", 15.0)) + 5.0
         )
-        self._capture = SystemAudioCapture(source_name=source, buffer=buffer)
+        self._capture = resolve_backend().open_stream(source, buffer=buffer)
         self._engine = WhisperEngine(
             model_size=str(self.config.get("model", "medium")),
             device=str(self.config.get("device", "cuda")),

@@ -13,7 +13,6 @@ from src.ui.settings import (
     HINT_ALLOW_REWRITE,
     HINT_SHOW_PARTIALS,
     SettingsDialog,
-    _friendly_audio_label,
     detect_partials_sticky_conflict,
 )
 
@@ -26,22 +25,56 @@ def qapp() -> QtWidgets.QApplication:
     return app
 
 
-def test_friendly_audio_bluetooth() -> None:
-    assert (
-        _friendly_audio_label("bluez_output.44_73_D6_C9_A1_5F.1.monitor")
-        == "Bluetooth · 44:73:D6:C9:A1:5F"
+def test_settings_audio_combo_uses_source_labels(
+    qapp: QtWidgets.QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    from src.audio.backends import AudioSource
+
+    sources = [
+        AudioSource(
+            id="alsa_output.pci-0000_00_1f.3.analog-stereo.monitor",
+            label="Salida ALSA · pci-0000_00_1f.3.analog-stereo",
+            backend="pulse",
+            is_loopback=True,
+        )
+    ]
+    monkeypatch.setattr("src.ui.settings.list_audio_sources", lambda: sources)
+    dlg = SettingsDialog(None, validate_config({"audio_monitor": sources[0].id}))
+    assert dlg.audio.currentData() == sources[0].id
+    assert dlg.audio.currentText() == sources[0].label
+    assert dlg.result_config()["audio_monitor"] == sources[0].id
+    dlg.close()
+
+
+def test_settings_audio_keeps_unplugged_device(
+    qapp: QtWidgets.QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Un dispositivo guardado que ya no esté conectado no se pierde al guardar."""
+    monkeypatch.setattr("src.ui.settings.list_audio_sources", lambda: [])
+    dlg = SettingsDialog(
+        None, validate_config({"audio_monitor": "bluez_output.AA_BB.1.monitor"})
     )
+    assert dlg.audio.currentData() == "bluez_output.AA_BB.1.monitor"
+    assert dlg.audio.currentText() == "Bluetooth · AA:BB"
+    assert dlg.result_config()["audio_monitor"] == "bluez_output.AA_BB.1.monitor"
+    dlg.close()
 
 
-def test_friendly_audio_alsa() -> None:
-    assert (
-        _friendly_audio_label("alsa_output.pci-0000_00_1f.3.analog-stereo.monitor")
-        == "Salida ALSA · pci-0000_00_1f.3.analog-stereo"
-    )
+def test_settings_audio_error_is_shown(
+    qapp: QtWidgets.QApplication, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    def boom() -> list:
+        raise RuntimeError("No se encontró `pactl`.")
 
-
-def test_friendly_audio_empty() -> None:
-    assert _friendly_audio_label("") == "(sin dispositivo)"
+    monkeypatch.setattr("src.ui.settings.list_audio_sources", boom)
+    dlg = SettingsDialog(None, validate_config({"audio_monitor": ""}))
+    hints = [
+        lab.text()
+        for lab in dlg.findChildren(QtWidgets.QLabel)
+        if lab.text().startswith("No se pudo listar audio")
+    ]
+    assert hints and "pactl" in hints[0]
+    dlg.close()
 
 
 def test_settings_edit_decode_switches_to_custom(qapp: QtWidgets.QApplication) -> None:

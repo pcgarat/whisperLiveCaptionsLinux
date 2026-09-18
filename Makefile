@@ -48,7 +48,7 @@ format: install ## Formatea con ruff
 check: test lint ## Tests + lint
 
 devices: install ## Lista monitores PipeWire/Pulse disponibles
-	$(BIN)/python -c "from src.audio.devices import list_audio_monitors; print('\n'.join(list_audio_monitors()) or '(ninguno)')"
+	$(BIN)/python -c "from src.audio.devices import list_audio_sources; print('\n'.join(f'{s.id}\t{s.label}' for s in list_audio_sources()) or '(ninguno)')"
 
 prefetch-models: install ## Descarga los modelos de los presets de fábrica (~3 GB)
 	$(BIN)/python scripts/prefetch-models.py

@@ -14,7 +14,7 @@ from PyQt6 import QtCore, QtGui, QtWidgets
 
 from src.asr.pipeline import AsrPipeline
 from src.asr.types import CaptionUpdate
-from src.audio.devices import list_audio_monitors
+from src.audio.devices import list_audio_sources
 from src.config import (
     apply_app_preset,
     delete_app_preset,
@@ -80,11 +80,11 @@ class AppController:
         if self.config.get("audio_monitor"):
             return
         try:
-            monitors = list_audio_monitors()
+            sources = list_audio_sources()
         except Exception:
             return
-        if monitors:
-            self.config["audio_monitor"] = monitors[0]
+        if sources:
+            self.config["audio_monitor"] = sources[0].id
             save_config(self.config, self.config_path)
 
     def start(self) -> int:
@@ -267,7 +267,7 @@ class AppController:
             desired = str(new_cfg.get("audio_monitor") or "")
             if desired:
                 try:
-                    monitors = set(list_audio_monitors())
+                    monitors = {source.id for source in list_audio_sources()}
                 except Exception:
                     monitors = set()
                 if desired not in monitors:

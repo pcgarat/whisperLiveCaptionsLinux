@@ -1,45 +1,41 @@
 from __future__ import annotations
 
-import shutil
-import subprocess
+from src.audio.backends import AudioBackend, AudioSource
+from src.audio.pulse import MISSING_PACTL, PulseBackend
+
+# Orden de preferencia. Añadir un backend es añadir una fila (y, entonces sí,
+# una clave `audio_backend` en config para poder forzarlo).
+_REGISTRY: tuple[AudioBackend, ...] = (PulseBackend(),)
 
 
-def list_audio_monitors(pactl_bin: str | None = None) -> list[str]:
-    """Lista fuentes Pulse/PipeWire; prioriza monitores de salida (`*.monitor`)."""
-    binary = pactl_bin or shutil.which("pactl")
-    if not binary:
-        raise RuntimeError(
-            "No se encontró `pactl`. Instala PulseAudio/PipeWire utils "
-            "(paquete `pulseaudio-utils` o equivalente)."
-        )
-
-    try:
-        proc = subprocess.run(
-            [binary, "list", "sources", "short"],
-            check=True,
-            capture_output=True,
-            text=True,
-        )
-    except subprocess.CalledProcessError as exc:
-        raise RuntimeError(
-            f"Falló `pactl list sources short`: {exc.stderr.strip()}"
-        ) from exc
-
-    return parse_pactl_sources_short(proc.stdout)
+def registered_backends() -> tuple[AudioBackend, ...]:
+    return _REGISTRY
 
 
-def parse_pactl_sources_short(output: str) -> list[str]:
-    names: list[str] = []
-    for line in output.splitlines():
-        line = line.strip()
-        if not line:
-            continue
-        parts = line.split()
-        if len(parts) < 2:
-            continue
-        names.append(parts[1])
+def available_backends() -> list[AudioBackend]:
+    return [backend for backend in _REGISTRY if backend.is_available()]
 
-    monitors = [n for n in names if n.endswith(".monitor")]
-    if monitors:
-        return monitors
-    return names
+
+def resolve_backend(name: str | None = None) -> AudioBackend:
+    """Backend pedido por nombre, o el primero disponible."""
+    wanted = str(name or "").strip().lower()
+    if wanted:
+        for backend in _REGISTRY:
+            if backend.name == wanted:
+                return backend
+        raise RuntimeError(f"Backend de audio desconocido: {wanted}")
+    usable = available_backends()
+    if not usable:
+        raise RuntimeError(MISSING_PACTL)
+    return usable[0]
+
+
+def list_audio_sources(backend: AudioBackend | None = None) -> list[AudioSource]:
+    return (backend or resolve_backend()).list_sources()
+
+
+def describe_audio_source(
+    source_id: str, backend: AudioBackend | None = None
+) -> AudioSource:
+    """Etiqueta un id persistido aunque su dispositivo ya no esté."""
+    return (backend or resolve_backend()).describe(source_id)

@@ -93,3 +93,36 @@ tests → docs.
 - Alternativa rechazada: `setFont()` en las QLabel en vez de QSS. Sería más exacto para
   las métricas de altura, pero mezclar `setFont` con `font-size` en QSS tiene resolución
   ambigua en Qt; el resto de knobs visuales ya viven en la hoja de estilo.
+
+---
+
+# Plan: Fase 2.11 — abstracción de backends de audio
+
+Spec: `docs/specs/fase2.11-backends-audio-2026-09-18.md`
+Intent: `docs/intent/fase2.11-backends-audio-2026-09-18.md`
+
+## Enfoque
+
+1. **Strategy + registro**: `AudioBackend` como Protocol y una tupla de backends por
+   orden de preferencia. Añadir uno es añadir una fila, no un `if` por sistema.
+2. **Refactor sin cambio de comportamiento**: mismas etiquetas, mismo dispositivo por
+   defecto, mismos mensajes de error. Verificable con la config real de la máquina.
+3. **El contrato de formato vive en el backend**: «entregas float32 mono a `sample_rate`».
+
+## Crítica / mejoras conscientes
+
+- **No se escribe remuestreador ni downmix**, aunque era parte de la idea inicial.
+  `parec` ya entrega mono a 16 kHz, así que hoy no tendría ni un solo consumidor: sería
+  código muerto que además hay que mantener y probar. Queda como contrato del Protocol,
+  a escribir con el primer backend que lo necesite.
+- **Sin clave `audio_backend` en config.** Con un backend, un selector es una opción que
+  solo puede tomar un valor. Entra cuando entre el segundo.
+- **`list_audio_monitors()` se elimina en vez de dejar un alias.** Es API interna con dos
+  llamadas; una capa de compatibilidad solo serviría para tener dos formas de hacer lo
+  mismo.
+- **La etiqueta legible se muda de la UI al backend.** `_friendly_audio_label` formateaba
+  identificadores de Pulse desde `src/ui/settings.py`: un backend nuevo habría tenido que
+  pelearse con el formateador del anterior.
+- **Windows y ALSA quedan fuera a propósito**, no por dificultad técnica. Windows no se
+  puede verificar sin máquina, y ALSA puro no tiene monitor de salida: obligaría al
+  usuario a cargar `snd-aloop`. El hueco queda abierto, que es justo el objetivo.

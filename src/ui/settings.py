@@ -16,7 +16,7 @@ from src.asr.translate import (
     TRANSLATOR_MODEL_IDS,
     TRANSLATOR_MODEL_LABELS,
 )
-from src.audio.devices import list_audio_monitors
+from src.audio.devices import describe_audio_source, list_audio_sources
 from src.config import (
     COMPUTE_TYPE_LABELS,
     COMPUTE_TYPES,
@@ -591,26 +591,6 @@ def _field_label(text: str) -> QtWidgets.QLabel:
     )
     lab.setFixedHeight(CONTROL_HEIGHT)
     return lab
-
-
-def _friendly_audio_label(device: str) -> str:
-    """Etiqueta legible sin perder el id técnico en el tooltip."""
-    name = device.strip()
-    if not name:
-        return "(sin dispositivo)"
-    short = name
-    if short.endswith(".monitor"):
-        short = short[: -len(".monitor")]
-    if short.startswith("bluez_output."):
-        mac = short.removeprefix("bluez_output.").rsplit(".", 1)[0].replace("_", ":")
-        return f"Bluetooth · {mac}"
-    if short.startswith("alsa_output."):
-        rest = short.removeprefix("alsa_output.")
-        return f"Salida ALSA · {rest}"
-    if "." in short:
-        kind, rest = short.split(".", 1)
-        return f"{kind} · {rest}"
-    return short
 
 
 def _alignment_icon(mode: str, *, size: int = 20, color: str = "#c5cad6") -> QtGui.QIcon:
@@ -1198,7 +1178,9 @@ class SettingsDialog(QtWidgets.QDialog):
                 if pos >= 0:
                     self.audio.setCurrentIndex(pos)
                 else:
-                    self.audio.insertItem(0, _friendly_audio_label(audio), audio)
+                    self.audio.insertItem(
+                        0, describe_audio_source(audio).label, audio
+                    )
                     self.audio.setCurrentIndex(0)
 
             mode = str(self._config.get("latency_mode", "stable"))
@@ -1407,23 +1389,21 @@ class SettingsDialog(QtWidgets.QDialog):
         self.audio = QtWidgets.QComboBox()
         audio_error: str | None = None
         try:
-            devices = list_audio_monitors()
+            sources = list_audio_sources()
         except Exception as exc:
-            devices = []
+            sources = []
             audio_error = str(exc)
-        if not devices:
-            devices = [str(config.get("audio_monitor") or "")]
-        for dev in devices:
-            if not dev:
+        for source in sources:
+            if not source.id:
                 continue
-            self.audio.addItem(_friendly_audio_label(dev), dev)
+            self.audio.addItem(source.label, source.id)
         current = str(config.get("audio_monitor") or "")
         if current:
             pos = self.audio.findData(current)
             if pos >= 0:
                 self.audio.setCurrentIndex(pos)
             else:
-                self.audio.insertItem(0, _friendly_audio_label(current), current)
+                self.audio.insertItem(0, describe_audio_source(current).label, current)
                 self.audio.setCurrentIndex(0)
         _size_combo(self.audio, "lg")
         capture.add_row("Audio (monitor)", self.audio)

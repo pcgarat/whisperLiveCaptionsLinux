@@ -102,3 +102,34 @@ Spec: `docs/specs/fase2.10-tipografia-overlay-2026-09-18.md`
 
 - [ ] Cambiar familia y peso, Guardar → el cartón cambia sin cortar audio ni recargar modelos
 - [ ] Guardar un preset general con la tipografía elegida y volver a aplicarlo
+
+---
+
+# Tasks: Fase 2.11 — abstracción de backends de audio
+
+Spec: `docs/specs/fase2.11-backends-audio-2026-09-18.md`
+
+## Task 1: Contrato y registro
+
+- [x] `src/audio/backends.py`: `AudioSource`, `AudioStream`, `AudioBackend`
+- [x] `src/audio/devices.py`: registro, `resolve_backend`, `list_audio_sources`,
+      `describe_audio_source`
+- [x] Verify: `pytest -q tests/test_audio_devices.py`
+
+## Task 2: Backend Pulse/PipeWire
+
+- [x] `src/audio/pulse.py`: parseo de `pactl`, etiquetas legibles, `is_loopback`
+- [x] `open_stream()` devuelve el `SystemAudioCapture` de siempre
+- [x] Verify: `make devices` lista los monitores reales con etiqueta
+
+## Task 3: Migrar puntos de uso
+
+- [x] `src/asr/pipeline.py` usa `resolve_backend().open_stream(...)`
+- [x] `src/app.py` y `src/ui/settings.py` usan `AudioSource` (`.id` / `.label`)
+- [x] `_friendly_audio_label` y `list_audio_monitors` eliminados de la UI
+- [x] Verify: `make check` + combo de audio con la config real
+
+## Task 4: Smoke manual (acceptance)
+
+- [ ] Arrancar, cambiar de dispositivo en Settings y transcribir con el nuevo
+- [ ] Desconectar el dispositivo guardado y comprobar que sigue en la lista sin romper
