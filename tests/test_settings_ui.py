@@ -185,6 +185,52 @@ def test_settings_appearance_sliders_and_colors(
     dlg.close()
 
 
+def test_settings_font_family_and_weight(qapp: QtWidgets.QApplication) -> None:
+    from src.ui.fonts import available_caption_fonts
+
+    curated, rest = available_caption_fonts()
+    family = (curated or rest)[0]
+    dlg = SettingsDialog(
+        None, validate_config({"font_family": family, "font_weight": "bold"})
+    )
+    assert dlg.font_family.currentData() == family
+    assert dlg.font_weight.currentData() == "bold"
+    assert dlg.font_family.itemData(0) == ""
+
+    idx = dlg.font_family.findData("")
+    dlg.font_family.setCurrentIndex(idx)
+    weight_idx = dlg.font_weight.findData("normal")
+    dlg.font_weight.setCurrentIndex(weight_idx)
+    cfg = dlg.result_config()
+    assert cfg["font_family"] == ""
+    assert cfg["font_weight"] == "normal"
+    dlg.close()
+
+
+def test_settings_font_family_missing_is_kept(qapp: QtWidgets.QApplication) -> None:
+    """Una familia que no esté en el sistema no se pierde al guardar."""
+    dlg = SettingsDialog(None, validate_config({"font_family": "Fuente Fantasma"}))
+    assert dlg.font_family.currentData() == "Fuente Fantasma"
+    assert "no instalada" in dlg.font_family.currentText()
+    assert dlg.result_config()["font_family"] == "Fuente Fantasma"
+    dlg.close()
+
+
+def test_settings_preview_reflects_typography(qapp: QtWidgets.QApplication) -> None:
+    from src.ui.fonts import available_caption_fonts
+
+    curated, rest = available_caption_fonts()
+    family = (curated or rest)[0]
+    dlg = SettingsDialog(None, validate_config({}))
+    idx = dlg.font_family.findData(family)
+    dlg.font_family.setCurrentIndex(idx)
+    dlg.font_weight.setCurrentIndex(dlg.font_weight.findData("bold"))
+    qss = dlg._preview_caption.styleSheet()
+    assert f'font-family: "{family}";' in qss
+    assert "font-weight: 700;" in qss
+    dlg.close()
+
+
 def test_detect_partials_sticky_conflict_none_when_compatible() -> None:
     assert (
         detect_partials_sticky_conflict(
@@ -424,6 +470,7 @@ def test_app_preset_reload_updates_controls(qapp: QtWidgets.QApplication) -> Non
         validate_config(
             {
                 "font_size": 55,
+                "font_weight": "bold",
                 "language": "es",
                 "latency_mode": "low",
                 "text_align": "left",
@@ -434,6 +481,7 @@ def test_app_preset_reload_updates_controls(qapp: QtWidgets.QApplication) -> Non
         )
     )
     assert dlg.font_size.value() == 55
+    assert dlg.font_weight.currentData() == "bold"
     assert dlg.language.currentData() == "es"
     assert dlg.latency_mode.currentData() == "low"
     assert dlg._current_text_align() == "left"

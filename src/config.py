@@ -53,6 +53,18 @@ TEXT_ALIGN_LABELS: dict[str, str] = {
     "left": "Izquierda",
 }
 
+# Grosor del texto del overlay. `semibold` = el 600 que ya se pintaba antes de la fase 2.10.
+FONT_WEIGHT_MODES = ("normal", "semibold", "bold")
+FONT_WEIGHT_LABELS: dict[str, str] = {
+    "normal": "Normal",
+    "semibold": "Seminegrita",
+    "bold": "Negrita",
+}
+
+# La familia se interpola en QSS: fuera lo que pueda cerrar la declaración o el bloque.
+_FONT_FAMILY_FORBIDDEN = '"\';{}'
+_FONT_FAMILY_MAX_LEN = 64
+
 # Cuantización faster-whisper (CTranslate2). Solo Whisper; NLLB usa int8 aparte.
 COMPUTE_TYPES = ("float16", "int8_float16", "int8")
 COMPUTE_TYPE_LABELS: dict[str, str] = {
@@ -117,6 +129,8 @@ def _builtin_defaults() -> dict[str, Any]:
         },
         "always_on_top": True,
         "font_size": 26,
+        "font_family": "",
+        "font_weight": "semibold",
         "font_color": "#ffffff",
         "bg_color": "#000000",
         "bg_alpha": 0.6,
@@ -476,6 +490,22 @@ def _normalize_second_line_mode(raw: dict[str, Any]) -> str:
     return mode
 
 
+def _normalize_font_family(raw: Any) -> str:
+    """Familia lista para QSS; `""` = fuente por defecto de Qt.
+
+    No se comprueba que esté instalada: la config es portable entre máquinas y Qt
+    ya hace fallback. Solo se sanea lo que rompería la hoja de estilo.
+    """
+    text = str(raw or "")
+    cleaned = "".join(ch for ch in text if ch not in _FONT_FAMILY_FORBIDDEN)
+    return " ".join(cleaned.split())[:_FONT_FAMILY_MAX_LEN]
+
+
+def _normalize_font_weight(raw: Any) -> str:
+    weight = str(raw or "").strip().lower()
+    return weight if weight in FONT_WEIGHT_MODES else "semibold"
+
+
 def _normalize_window_pos(raw: Any) -> list[int] | None:
     if raw is None:
         return None
@@ -689,6 +719,8 @@ def validate_config(
     cfg.update(raw)
 
     cfg["font_size"] = int(_clamp(int(cfg["font_size"]), 10, 100))
+    cfg["font_family"] = _normalize_font_family(cfg.get("font_family"))
+    cfg["font_weight"] = _normalize_font_weight(cfg.get("font_weight"))
     cfg["bg_alpha"] = float(_clamp(float(cfg["bg_alpha"]), 0.05, 1.0))
     cfg["padding"] = int(_clamp(int(cfg["padding"]), 0, 100))
     align = str(cfg.get("text_align") or "").strip().lower()

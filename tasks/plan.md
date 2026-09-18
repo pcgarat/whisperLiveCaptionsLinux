@@ -55,3 +55,41 @@ precarga e instalador → tests → docs.
   descarga en vez de 2,5 GB). Ahorra ancho de banda al usuario pero añade un artefacto
   que mantener y una dependencia de un repo nuestro; convertir en la instalación es
   reproducible y no depende de nadie.
+
+---
+
+# Plan: Fase 2.10 — tipografía del overlay
+
+Spec: `docs/specs/fase2.10-tipografia-overlay-2026-09-18.md`
+Intent: `docs/intent/fase2.10-tipografia-overlay-2026-09-18.md`
+
+## Enfoque
+
+1. **Catálogo en código** (`src/ui/fonts.py`), no una lista de fuentes en `config.example.json`.
+2. **Consultar el sistema, no adivinar**: la lista se cruza con `QFontDatabase`, así que
+   nunca se ofrece una familia que no esté instalada.
+3. **Default idéntico al aspecto actual** (`""` + `semibold`): actualizar la app no mueve
+   ni un píxel del cartón hasta que el usuario elija.
+
+## Orden de slices
+
+Config + normalización → catálogo de fuentes → UI Apariencia + vista previa → overlay →
+tests → docs.
+
+## Crítica / mejoras conscientes
+
+- **`QFontComboBox` descartado** aunque sea la opción de cero mantenimiento: lista todas
+  las familias, incluidas símbolos, emoji y dingbats, que en un subtítulo se ven como
+  cajas. La lista curada + resto filtrado por cobertura latina da una primera pantalla
+  útil sin encerrar al usuario en una whitelist.
+- **La familia no se valida contra las instaladas.** Tentador para «evitar valores
+  inválidos», pero rompería llevarse el `config.json` a otra máquina: Qt hace fallback
+  solo y la UI ya avisa con «(no instalada)».
+- **Sí se sanea para QSS.** El valor se interpola en una hoja de estilo, así que
+  `"`, `;` y llaves se borran en `validate_config`: es el único vector real de config
+  malformada, y no depende de la UI (que ya solo ofrece familias reales).
+- **Peso como enum, no como entero CSS.** `semibold` se lee en el `config.json` y deja el
+  mapeo a 400/600/700 en la capa de UI, que es la que sabe de QSS.
+- Alternativa rechazada: `setFont()` en las QLabel en vez de QSS. Sería más exacto para
+  las métricas de altura, pero mezclar `setFont` con `font-size` en QSS tiene resolución
+  ambigua en Qt; el resto de knobs visuales ya viven en la hoja de estilo.

@@ -1,4 +1,4 @@
-Última modificación: 2026-09-13
+Última modificación: 2026-09-18
 
 # Developers guide — whisperLiveCaptionsLinux
 
@@ -455,6 +455,8 @@ Clamps decode: `beam_size` 1–8, `length_penalty` 0.6–1.5, `no_repeat_ngram_s
 | `captions_allow_rewrite`         | `true`                | Ver §7             |
 | `always_on_top`                  | `true`                | Hint de ventana    |
 | `font_size`                      | `28`                  | 10–100             |
+| `font_family`                    | `""`                  | `""` = fuente de Qt |
+| `font_weight`                    | `semibold`            | `normal` \| `semibold` \| `bold` |
 | `font_color` / `bg_color`        | `#ffffff` / `#000000` | CSS overlay        |
 | `bg_alpha`                       | `0.55`                | 0.05–1.0           |
 | `padding`                        | `24`                  | 0–100 px           |

@@ -61,3 +61,44 @@ Spec: `docs/specs/fase2.9-presets-video-modelos-2026-09-13.md`
 - [ ] `video-es` transcribe español sin cargar el traductor (VRAM ~1 GB)
 - [ ] Comprobar VRAM total con navegador reproduciendo vídeo (< 8 GB)
 - [ ] `make install-user` en `HOME` temporal → precarga sin descargas en el 1.er arranque
+
+---
+
+# Tasks: Fase 2.10 — tipografía del overlay
+
+Spec: `docs/specs/fase2.10-tipografia-overlay-2026-09-18.md`
+
+## Task 1: Config `font_family` + `font_weight`
+
+- [x] `FONT_WEIGHT_MODES` / `FONT_WEIGHT_LABELS` y defaults en `src/config.py`
+- [x] Normalización en `validate_config` (saneado para QSS, límite de longitud, enum de peso)
+- [x] `config.example.json` con los dos knobs
+- [x] Verify: `pytest -q tests/test_config.py`
+
+## Task 2: Catálogo de fuentes
+
+- [x] `src/ui/fonts.py`: `CAPTION_FONT_PRESETS`, `available_caption_fonts()`, helpers QSS
+- [x] Filtrado: cobertura latina, sin privadas, sin bitmap, sin duplicados
+- [x] Verify: `pytest -q tests/test_fonts.py`
+
+## Task 3: UI Apariencia
+
+- [x] Combos «Tipo de letra» (con muestra por ítem) y «Grosor»
+- [x] Familia no instalada → ítem «(no instalada)» seleccionado
+- [x] Vista previa, `reload_from_config()` y `result_config()`
+- [x] Verify: `pytest -q tests/test_settings_ui.py`
+
+## Task 4: Overlay
+
+- [x] `_apply_style()` aplica familia a las tres líneas y peso a traducción + confirmado
+- [x] Verify: `pytest -q tests/test_overlay_captions.py`
+
+## Task 5: Docs
+
+- [x] Tabla de config en `docs/developers-guide-*.md`
+- [x] Verify: `make check`
+
+## Task 6: Smoke manual (acceptance)
+
+- [ ] Cambiar familia y peso, Guardar → el cartón cambia sin cortar audio ni recargar modelos
+- [ ] Guardar un preset general con la tipografía elegida y volver a aplicarlo

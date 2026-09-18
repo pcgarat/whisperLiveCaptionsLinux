@@ -59,6 +59,8 @@
   },
   "always_on_top": true,
   "font_size": 26,
+  "font_family": "",
+  "font_weight": "semibold",
   "font_color": "#ffffff",
   "bg_color": "#000000",
   "bg_alpha": 0.6,

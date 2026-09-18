@@ -14,6 +14,7 @@ from src.asr.types import CaptionUpdate
 from src.debug.live_metrics import PERF, format_perf_chip
 from src.debug.trace import debug_hud_enabled, debug_trace_enabled
 from src.debug.vram import query_vram
+from src.ui.fonts import font_family_qss, font_weight_css
 
 # Cola visible del overlay: suficiente para scrollear, sin crecer sin límite.
 _MAX_DISPLAY_CHARS = 4000
@@ -702,6 +703,8 @@ class SubtitleOverlay(QtWidgets.QWidget):
 
     def _apply_style(self) -> None:
         font_size = int(self.config.get("font_size", 28))
+        family_qss = font_family_qss(str(self.config.get("font_family", "")))
+        weight = font_weight_css(str(self.config.get("font_weight", "semibold")))
         font_color = str(self.config.get("font_color", "#ffffff"))
         bg = str(self.config.get("bg_color", "#000000"))
         alpha = float(self.config.get("bg_alpha", 0.55))
@@ -729,16 +732,19 @@ class SubtitleOverlay(QtWidgets.QWidget):
             QLabel#translatedCaption {{
                 color: {font_color};
                 font-size: {font_size}px;
-                font-weight: 600;
+                {family_qss}
+                font-weight: {weight};
             }}
             QLabel#finalCaption {{
                 color: {font_color};
                 font-size: {asr_size}px;
-                font-weight: 600;
+                {family_qss}
+                font-weight: {weight};
             }}
             QLabel#partialCaption {{
                 color: {partial_rgba};
                 font-size: {max(12, asr_size - 6)}px;
+                {family_qss}
                 font-style: italic;
             }}
             QLabel#langLabel {{

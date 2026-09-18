@@ -117,6 +117,31 @@ def test_text_align_normalize() -> None:
     assert validate_config({"text_align": "right"})["text_align"] == "center"
 
 
+def test_font_family_normalize() -> None:
+    assert validate_config({})["font_family"] == ""
+    assert validate_config({"font_family": "  Noto  Sans "})["font_family"] == "Noto Sans"
+    assert validate_config({"font_family": None})["font_family"] == ""
+    # El valor se interpola en QSS: nada que pueda cerrar la declaración o el bloque.
+    assert (
+        validate_config({"font_family": 'Fake"; color: red; }'})["font_family"]
+        == "Fake color: red"
+    )
+    assert len(validate_config({"font_family": "X" * 200})["font_family"]) == 64
+    # Una familia que no esté instalada se conserva: la config es portable.
+    assert (
+        validate_config({"font_family": "Helvetica Neue LT Pro"})["font_family"]
+        == "Helvetica Neue LT Pro"
+    )
+
+
+def test_font_weight_normalize() -> None:
+    assert validate_config({})["font_weight"] == "semibold"
+    assert validate_config({"font_weight": "BOLD"})["font_weight"] == "bold"
+    assert validate_config({"font_weight": "normal"})["font_weight"] == "normal"
+    assert validate_config({"font_weight": "nope"})["font_weight"] == "semibold"
+    assert validate_config({"font_weight": 700})["font_weight"] == "semibold"
+
+
 def test_migrate_legacy_top_level_into_active_mode() -> None:
     cfg = validate_config(
         {

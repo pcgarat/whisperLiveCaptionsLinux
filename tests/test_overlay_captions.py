@@ -936,6 +936,23 @@ def test_second_line_live_asr_without_translation(
     ov.close()
 
 
+def test_apply_config_typography(qapp: QtWidgets.QApplication) -> None:
+    ov, _q = _overlay(qapp)
+    # Sin familia elegida: la fuente la pone Qt y el peso sigue siendo el de siempre.
+    # (el HUD de depuración trae su propio `font-family: monospace`, sin comillas)
+    assert 'font-family: "' not in ov.styleSheet()
+    assert "font-weight: 600;" in ov.styleSheet()
+
+    cfg = dict(ov.config)
+    cfg["font_family"] = "DejaVu Sans"
+    cfg["font_weight"] = "bold"
+    ov.apply_config(cfg)
+    qss = ov.styleSheet()
+    assert qss.count('font-family: "DejaVu Sans";') == 3
+    assert qss.count("font-weight: 700;") == 2  # traducción y confirmado, no el parcial
+    ov.close()
+
+
 def test_apply_config_second_line_mode(qapp: QtWidgets.QApplication) -> None:
     ov, q = _overlay(qapp, cfg={"second_line_mode": "live_asr"})
     ov.show()

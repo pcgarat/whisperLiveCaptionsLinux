@@ -20,6 +20,8 @@ from src.audio.devices import list_audio_monitors
 from src.config import (
     COMPUTE_TYPE_LABELS,
     COMPUTE_TYPES,
+    FONT_WEIGHT_LABELS,
+    FONT_WEIGHT_MODES,
     LATENCY_FACTORY_PRESETS,
     SECOND_LINE_MODES,
     TEXT_ALIGN_LABELS,
@@ -40,12 +42,27 @@ from src.config import (
 )
 from src.presets import is_factory_preset
 from src.ui.branding import load_brand_logo_pixmap, repo_or_app_root
+from src.ui.fonts import (
+    available_caption_fonts,
+    font_family_qss,
+    font_weight_css,
+)
 
 HINT_TRANSLATOR_MODEL = (
     "Motor de traducción al español. Opus-MT usa un modelo dedicado por idioma: "
     "más rápido, menos VRAM y no inventa texto en frases cortas. NLLB es un solo "
     "modelo para 200 idiomas, útil solo si tu idioma no tiene Opus-MT. "
     "Cambiarlo recarga solo el traductor."
+)
+HINT_FONT_FAMILY = (
+    "Tipografía de los subtítulos. Arriba, las elegidas por legibilidad sobre vídeo "
+    "que tengas instaladas; tras el separador, el resto de fuentes del sistema. "
+    "«Sistema» deja la del escritorio."
+)
+HINT_FONT_WEIGHT = (
+    "Grosor del trazo: más peso se lee mejor sobre fondos claros. Se aplica a la "
+    "traducción y al texto confirmado; la línea parcial sigue ligera y en cursiva. "
+    "Si la familia solo trae Regular y Negrita, Seminegrita se ve igual que Negrita."
 )
 HINT_COMPUTE_TYPE = (
     "Precisión de Whisper en GPU. float16 suele ser lo mejor; "
@@ -1196,6 +1213,8 @@ class SettingsDialog(QtWidgets.QDialog):
                 bool(self._config.get("captions_allow_rewrite", True))
             )
 
+            self._refresh_font_family_combo(str(self._config.get("font_family", "")))
+            self._set_font_weight(str(self._config.get("font_weight", "semibold")))
             self.font_size.setValue(int(self._config.get("font_size", 28)))
             self.font_size_value.setText(str(self.font_size.value()))
             self.padding.setValue(int(self._config.get("padding", 24)))
@@ -1505,6 +1524,20 @@ class SettingsDialog(QtWidgets.QDialog):
         body_layout.addWidget(self._preview_stage)
 
         look = _Section("Texto y colores")
+        self.font_family = QtWidgets.QComboBox()
+        _size_combo(self.font_family, "lg")
+        self._refresh_font_family_combo(str(config.get("font_family", "")))
+        self.font_family.currentIndexChanged.connect(self._on_font_style_changed)
+        look.add_row("Tipo de letra", self.font_family, HINT_FONT_FAMILY)
+
+        self.font_weight = QtWidgets.QComboBox()
+        for weight in FONT_WEIGHT_MODES:
+            self.font_weight.addItem(FONT_WEIGHT_LABELS[weight], weight)
+        _size_combo(self.font_weight, "md")
+        self._set_font_weight(str(config.get("font_weight", "semibold")))
+        self.font_weight.currentIndexChanged.connect(self._on_font_style_changed)
+        look.add_row("Grosor", self.font_weight, HINT_FONT_WEIGHT)
+
         font_wrap, self.font_size, self.font_size_value = _int_slider_row(
             low=10, high=100, value=int(config.get("font_size", 28))
         )
@@ -1784,6 +1817,56 @@ class SettingsDialog(QtWidgets.QDialog):
             return
         self._refresh_preview()
 
+    def _add_font_family_item(self, family: str) -> None:
+        """Cada ítem se pinta con su propia familia: el desplegable es la muestra."""
+        self.font_family.addItem(family, family)
+        self.font_family.setItemData(
+            self.font_family.count() - 1,
+            QtGui.QFont(family, 11),
+            QtCore.Qt.ItemDataRole.FontRole,
+        )
+
+    def _refresh_font_family_combo(self, preferred: str | None = None) -> None:
+        current = preferred
+        if current is None:
+            current = str(self.font_family.currentData() or "")
+        self.font_family.blockSignals(True)
+        self.font_family.clear()
+        self.font_family.addItem("Sistema (por defecto)", "")
+        curated, rest = available_caption_fonts()
+        for family in curated:
+            self._add_font_family_item(family)
+        if rest:
+            self.font_family.insertSeparator(self.font_family.count())
+            for family in rest:
+                self._add_font_family_item(family)
+        want = str(current or "").strip()
+        idx = self.font_family.findData(want)
+        if idx < 0 and want:
+            # Familia de la config que no está en el sistema: conservarla al guardar.
+            self.font_family.addItem(f"{want} (no instalada)", want)
+            idx = self.font_family.count() - 1
+        self.font_family.setCurrentIndex(max(idx, 0))
+        self.font_family.blockSignals(False)
+
+    def _current_font_family(self) -> str:
+        return str(self.font_family.currentData() or "")
+
+    def _current_font_weight(self) -> str:
+        weight = str(self.font_weight.currentData() or "semibold")
+        return weight if weight in FONT_WEIGHT_MODES else "semibold"
+
+    def _set_font_weight(self, weight: str) -> None:
+        idx = self.font_weight.findData(str(weight or "semibold"))
+        if idx < 0:
+            idx = self.font_weight.findData("semibold")
+        self.font_weight.blockSignals(True)
+        self.font_weight.setCurrentIndex(max(idx, 0))
+        self.font_weight.blockSignals(False)
+
+    def _on_font_style_changed(self, _index: int = 0) -> None:
+        self._refresh_preview()
+
     def _on_font_size_changed(self, value: int) -> None:
         self.font_size_value.setText(str(value))
         self._refresh_preview()
@@ -1815,7 +1898,8 @@ class SettingsDialog(QtWidgets.QDialog):
             QLabel#PreviewCaption {{
                 color: {font_color};
                 font-size: {font_size}px;
-                font-weight: 600;
+                {font_family_qss(self._current_font_family())}
+                font-weight: {font_weight_css(self._current_font_weight())};
                 background: {rgba};
                 border-radius: 12px;
                 padding: {pad}px;
@@ -2115,6 +2199,8 @@ class SettingsDialog(QtWidgets.QDialog):
                 "latency_mode": self._current_mode(),
                 "latency_profiles": deepcopy(self._profiles()),
                 "font_size": self.font_size.value(),
+                "font_family": self._current_font_family(),
+                "font_weight": self._current_font_weight(),
                 "padding": self.padding.value(),
                 "text_align": self._current_text_align(),
                 "font_color": self._swatch_hex(self.font_color_btn),
