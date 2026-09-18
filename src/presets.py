@@ -56,6 +56,24 @@ def video_preset_id(language: str) -> str:
     return f"{VIDEO_PRESET_PREFIX}{code}-es"
 
 
+def app_preset_label(preset_id: str) -> str:
+    """Label legible para selectores de preset general.
+
+    `default` → «Predeterminado», `video-en-es` → «Vídeo: Inglés». Un preset de
+    usuario no tiene nombre bonito guardado (solo se guarda el id ya slugificado),
+    así que se muestra tal cual.
+    """
+    pid = str(preset_id or "").strip()
+    if pid == APP_PRESET_DEFAULT:
+        return "Predeterminado"
+    if pid.startswith(VIDEO_PRESET_PREFIX):
+        rest = pid[len(VIDEO_PRESET_PREFIX) :]
+        code = rest[:-3] if rest.endswith("-es") and rest != "es" else rest
+        name = AVAILABLE_LANGUAGES.get(code, code.upper())
+        return f"Vídeo: {name}"
+    return pid
+
+
 def _video_preset(language: str) -> dict[str, Any]:
     code = str(language).strip().lower()
     # Sin `installed_languages`: el idioma activo se añade solo al normalizar, así

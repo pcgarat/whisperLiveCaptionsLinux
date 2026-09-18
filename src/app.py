@@ -111,6 +111,7 @@ class AppController:
             on_save_config=self._save_config,
             on_restart_pipeline=self._restart_pipeline_safe,
             on_translation_changed=self._hot_swap_translator,
+            on_apply_app_preset=self.apply_app_preset_from_overlay,
         )
         self.overlay.show()
 
@@ -250,16 +251,17 @@ class AppController:
             out.update(settings_dlg.geometry_snapshot())
         return validate_config(out)
 
-    def apply_app_preset_from_settings(
-        self, preset_id: str | None, settings_dlg: SettingsDialog
+    def _apply_app_preset(
+        self, preset_id: str | None, *, dialog_parent: QtWidgets.QWidget | None = None
     ) -> str | None:
         """Aplica preset al instante. Devuelve aviso (p. ej. monitor ausente) o None."""
         assert self.overlay is not None
+        parent = dialog_parent if dialog_parent is not None else self.overlay
         previous_monitor = str(self.config.get("audio_monitor") or "")
         try:
             new_cfg = apply_app_preset(self.config, preset_id)
         except ValueError as exc:
-            QtWidgets.QMessageBox.warning(settings_dlg, "Preset", str(exc))
+            QtWidgets.QMessageBox.warning(parent, "Preset", str(exc))
             return None
 
         warning: str | None = None
@@ -283,8 +285,17 @@ class AppController:
             trace_reason="app_preset_apply",
             restore_overlay_geometry=bool(preset_id),
         )
+        return warning
+
+    def apply_app_preset_from_settings(
+        self, preset_id: str | None, settings_dlg: SettingsDialog
+    ) -> str | None:
+        warning = self._apply_app_preset(preset_id, dialog_parent=settings_dlg)
         settings_dlg.reload_from_config(self.config)
         return warning
+
+    def apply_app_preset_from_overlay(self, preset_id: str | None) -> str | None:
+        return self._apply_app_preset(preset_id)
 
     def save_app_preset_from_settings(self, settings_dlg: SettingsDialog) -> None:
         live = self._merge_live_geometry(settings_dlg.result_config(), settings_dlg)

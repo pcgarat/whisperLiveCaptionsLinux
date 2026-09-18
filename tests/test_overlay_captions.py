@@ -11,6 +11,7 @@ os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 from PyQt6 import QtWidgets
 
 from src.asr.types import CaptionUpdate
+from src.config import apply_app_preset, validate_config
 from src.ui.overlay import SubtitleOverlay
 
 
@@ -1112,4 +1113,85 @@ def test_rewrite_refresh_keeps_updates_batched(
     assert ov.updatesEnabled()
     assert ov._caption_scroll.updatesEnabled()
     assert ov._final_text == "Hello there"
+    ov.close()
+
+
+def test_preset_selector_lists_factory_presets_with_labels(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    full_cfg = validate_config({"language": "en", "app_preset": "video-fr-es"})
+    ov, _ = _overlay(qapp, cfg=full_cfg)
+    labels = [
+        ov.preset_selector.itemText(i) for i in range(ov.preset_selector.count())
+    ]
+    assert "(ninguno)" in labels
+    assert "Predeterminado" in labels
+    assert "Vídeo: Francés" in labels
+    assert ov.preset_selector.currentData() == "video-fr-es"
+    assert ov.preset_selector.currentText() == "Vídeo: Francés"
+    ov.close()
+
+
+def test_selecting_preset_invokes_callback_once(qapp: QtWidgets.QApplication) -> None:
+    full_cfg = validate_config({"language": "en"})
+    ov, _ = _overlay(qapp, cfg=full_cfg)
+    calls: list[str | None] = []
+    ov.on_apply_app_preset = calls.append
+    idx = ov.preset_selector.findData("video-de-es")
+    ov.preset_selector.setCurrentIndex(idx)
+    assert calls == ["video-de-es"]
+    ov.close()
+
+
+def test_reentrant_apply_config_updates_selector_without_recursing(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    """El callback puede reaplicar la config al vuelo (patrón del AppController)
+    sin que el refresco del combo dispare una segunda llamada al callback."""
+    full_cfg = validate_config({"language": "en"})
+    ov, _ = _overlay(qapp, cfg=full_cfg)
+    calls: list[str | None] = []
+
+    def _apply(preset_id: str | None) -> str | None:
+        calls.append(preset_id)
+        new_cfg = apply_app_preset(ov.config, preset_id)
+        ov.apply_config(new_cfg)
+        return None
+
+    ov.on_apply_app_preset = _apply
+    idx = ov.preset_selector.findData("video-pt-es")
+    ov.preset_selector.setCurrentIndex(idx)
+    assert calls == ["video-pt-es"]
+    assert ov.config["language"] == "pt"
+    assert ov.lang_label.text() == "PT"
+    assert ov.preset_selector.currentData() == "video-pt-es"
+    ov.close()
+
+
+def test_apply_config_refreshes_selector_without_triggering_callback(
+    qapp: QtWidgets.QApplication,
+) -> None:
+    """Cuando la config llega de fuera (p. ej. Settings), el combo se sincroniza
+    pero no debe volver a pedir la aplicación del preset."""
+    full_cfg = validate_config({"language": "en", "app_preset": "video-en-es"})
+    ov, _ = _overlay(qapp, cfg=full_cfg)
+    calls: list[str | None] = []
+    ov.on_apply_app_preset = calls.append
+    new_cfg = apply_app_preset(ov.config, "video-it-es")
+    ov.apply_config(new_cfg)
+    assert calls == []
+    assert ov.preset_selector.currentData() == "video-it-es"
+    assert ov.preset_selector.currentText() == "Vídeo: Italiano"
+    ov.close()
+
+
+def test_preset_warning_shows_notice(qapp: QtWidgets.QApplication) -> None:
+    full_cfg = validate_config({"language": "en"})
+    ov, _ = _overlay(qapp, cfg=full_cfg)
+    ov._notice_timer.stop()
+    ov.on_apply_app_preset = lambda _preset_id: "monitor ausente"
+    idx = ov.preset_selector.findData("video-de-es")
+    ov.preset_selector.setCurrentIndex(idx)
+    assert not ov.notice_label.isHidden()
+    assert ov.notice_label.text() == "monitor ausente"
     ov.close()
